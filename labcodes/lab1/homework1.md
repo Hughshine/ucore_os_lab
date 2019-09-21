@@ -1,6 +1,6 @@
 # lab1 
 
-> hughshine at github
+> [hughshine](https://hughshine.github.io) at github
 
 [TOC]
 
