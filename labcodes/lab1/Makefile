@@ -37,7 +37,7 @@ QEMU := $(shell if which qemu-system-i386 > /dev/null; \
 	echo "***" 1>&2; exit 1; fi)
 endif
 
-# eliminate default suffix rules
+# eliminate default suffix rules TODO, 以下两句话的作用不是很懂。
 .SUFFIXES: .c .S .h
 
 # delete target files if there is an error (or make is interrupted)

@@ -30,9 +30,9 @@
  *  * bootmain() in this file takes over, reads in the kernel and jumps to it.
  * */
 
-#define SECTSIZE        512
+#define SECTSIZE        512 //512
 #define ELFHDR          ((struct elfhdr *)0x10000)      // scratch space
-
+// int arr[1000000];
 /* waitdisk - wait for disk ready */
 static void
 waitdisk(void) {
