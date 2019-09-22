@@ -195,4 +195,141 @@ target: prerequisits
 
 在`1.2`中对sign.c的源码分析可知，引导扇区为512字节，且最后两个字节为标志位`0x55 0xAA`。
 
-## 练习二
+## 练习二：使用qemu执行并调试lab1中的软件
+
+###  1. 从第一条指令开始，单步跟踪BIOS的执行。
+
+由于使用mac进行的实验，`make`脚本不兼容，不能直接调用`make debug`，因而查看实际执行的命令。
+
+```shell
+qemu-system-i386 -S -s -parallel stdio -hda bin/ucore.img -serial null &
+sleep 2
+gnome-terminal  -e "cgdb -q -x tools/gdbinit" # 在ubuntu上打开一个新的terminal，执行命令。
+```
+
+下面使用权宜的替代方法实验：开启两个terminal，分别执行以下命令。
+
+```shell
+# 额外的让qemu把执行的汇编输出到q.log
+qemu-system-i386 -S -s -parallel stdio -hda bin/ucore.img -serial null -d in_asm -D q.log
+# &
+gdb -q -x tools/gdbinit
+```
+
+其中，`tools/gdbinit`被更改为：
+
+```
+file bin/kernel
+set architecture i8086
+target remote :1234
+```
+
+在`gdb`中使用`si`单步执行，`g.log`中输出为以下。
+
+```asm
+----------------
+IN: 
+0xfffffff0:  ea 5b e0 00 f0           ljmpw    $0xf000:$0xe05b  # 加电后跳转
+
+----------------
+IN: 
+0x000fe05b:  2e 66 83 3e 08 61 00     cmpl     $0, %cs:0x6108  # 到了BIOS那儿
+
+----------------
+IN: 
+0x000fe062:  0f 85 7a f0              jne      0xd0e0
+
+----------------
+IN: 
+0x000fe066:  31 d2                    xorw     %dx, %dx
+
+# ...
+```
+
+### 2. 在初始化位置0x7c00设置实地址断点,测试断点正常。
+
+输入 `b *0x7c00`，设置实地址断点，`c`执行。并输出下面十句汇编。
+
+```assembly
+(gdb) x /10i $pc
+=> 0x7c00:      cli
+   0x7c01:      cld
+   0x7c02:      xor    %eax,%eax
+   0x7c04:      mov    %eax,%ds
+   0x7c06:      mov    %eax,%es
+   0x7c08:      mov    %eax,%ss
+   0x7c0a:      in     $0x64,%al
+   0x7c0c:      test   $0x2,%al
+   0x7c0e:      jne    0x7c0a
+   0x7c10:      mov    $0xd1,%al
+(gdb) 
+```
+
+说明断点正常。
+
+### 3. 反汇编代码与bootasm.S和 bootblock.asm进行比较。
+
+#### 3.1 输出与`obj/bootblock.asm`
+
+首先分析输出与`bootblock.asm`的关系。`bootblock.asm`中注明的地址范围为`7c00`至`7d80`，输出中搜索这两处地址，查看其间代码，发现除了指令名称稍有修改，其他是完全符合的。也可以发现，实际上只执行了部分的`bootmain`段的代码，就进行了跳转。
+
+> 差别大概就是`mov` 和 `movl`的差别
+
+#### 3.2 `obj/bootblock.asm` 与 `boot/bootasm.S`
+
+因为`obj/bootblock.asm`就是由`boot/bootasm.S`与`boot/bootmain.c`生成的，所以前面这部分（`boot/bootasm.S`这块）就应该是一样的。的确就是一样的呀（除了一点点细节的差别）。
+
+不过这里有个疑惑，虽然`boot/bootmain.c`中代码被编译成了汇编放入`obj/bootblock.asm`，不过仍能看见类似c函数的函数定义结构，并不清楚它们的作用。
+
+```c
+static void readseg(uintptr_t va, uint32_t count, uint32_t offset) {
+... // 汇编代码
+// 还没有括号 真的是没头脑/滑稽
+```
+
+### 4. 自己找一个bootloader或内核中的代码位置，设置断点并进行测试。
+
+想看看bootmain那里在做什么，所以设置了断点：`b *0x7d0f`。
+
+虽然`bootblockl.asm`里面写下一句要`    readseg((uintptr_t)ELFHDR, SECTSIZE * 8, 0);`，但实际上就是在按汇编指令顺序执行：（其实也应该如此，但是不知道readseg为什么要在这里写一次？？认为和上一问的疑惑有关。）
+
+```
+(gdb) si
+0x00007d10 in ?? ()
+(gdb) si
+0x00007d12 in ?? ()
+(gdb) si
+0x00007d14 in ?? ()
+(gdb) si
+0x00007d19 in ?? ()
+```
+
+简单查了一下，这里应该在第四个练习讨论。所以之后再看。
+
+实际执行的汇编就是这个：
+
+```assembly
+IN: 
+0x00007d0f:  55                       pushl    %ebp
+
+----------------
+IN: 
+0x00007d10:  31 c9                    xorl     %ecx, %ecx
+
+----------------
+IN: 
+0x00007d12:  89 e5                    movl     %esp, %ebp
+
+----------------
+IN: 
+0x00007d14:  ba 00 10 00 00           movl     $0x1000, %edx
+```
+
+> 另注，后来在`tools/gdbinit`中添加了下面的命令，使得每一次停止都自动输出下一条指令。gdb中看到的就不只是❓了，很方便。
+>
+> ```shell
+> define hook-stop
+> x/i $pc
+> end
+> ```
+
