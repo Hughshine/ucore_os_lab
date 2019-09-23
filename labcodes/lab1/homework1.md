@@ -306,6 +306,8 @@ static void readseg(uintptr_t va, uint32_t count, uint32_t offset) {
 
 简单查了一下，这里应该在第四个练习讨论。所以之后再看。
 
+> 后来看到，感觉就是把原来的c代码和对应的汇编放在一起了。。让人读着方便的。。但是没有查到相关的说明。。
+
 实际执行的汇编就是这个：
 
 ```assembly
@@ -400,7 +402,7 @@ seta20.2:
     # identical to physical addresses, so that the
     # effective memory map does not change during the switch.
     
-    # lgdt -> 加载全局段描述符
+    # lgdt -> 直接加载全局段描述符
     lgdt gdtdesc
     
     # 将cr0寄存器中PE对应位置位1，开启保护模式。然后去保护模式对应代码处。
@@ -451,6 +453,130 @@ gdtdesc:  # gdt的描述符：长度与起始位置
 
 疑惑：
 
-1. 保护模式下段寄存器的初始化
+- [ ] 保护模式下段寄存器的初始化
 
 > 另有一些硬件细节被暂时忽略了，就看了和做作业有关的部分。。用到了会再看。。
+
+## 练习四：分析bootloader加载elf格式os的过程。
+
+- bootloader是如何加载ELF格式的OS？
+
+概念说明：
+
+* IDE即“电子集成[驱动器](https://baike.baidu.com/item/%E9%A9%B1%E5%8A%A8%E5%99%A8)”，它的本意是指把“[硬盘控制器](https://baike.baidu.com/item/%E7%A1%AC%E7%9B%98%E6%8E%A7%E5%88%B6%E5%99%A8/3781789)”与“盘体”集成在一起的[硬盘驱动器](https://baike.baidu.com/item/%E7%A1%AC%E7%9B%98%E9%A9%B1%E5%8A%A8%E5%99%A8/213766)。
+
+### 1. bootloader读取硬盘扇区
+
+硬盘的访问，要看这几个让人没头脑的函数。要参考硬盘I/O的那些参数和相关函数。
+
+```c
+// waitdisk()
+// 0x1f7是硬盘的状态与命令寄存器，检查它是否在忙碌状态。
+static void
+waitdisk(void) {
+    while ((inb(0x1F7) & 0xC0) != 0x40)
+        /* do nothing */;
+}
+
+/* readsect - read a single sector at @secno into @dst */
+// readsect(dst, secno) 
+// 将第secno扇区放到dst内存处
+static void
+readsect(void *dst, uint32_t secno) {
+    // wait for disk to be ready
+    waitdisk();
+	
+	//0x1f2控制读写的扇区数，设置为1
+    outb(0x1F2, 1);                         // count = 1
+    //在LBA模式下 0x1f3 - 0x1f6为LBA参数
+    //其中0x1f6只有前四位有效，第4位控制主盘or从盘
+    outb(0x1F3, secno & 0xFF);
+    outb(0x1F4, (secno >> 8) & 0xFF);
+    outb(0x1F5, (secno >> 16) & 0xFF);
+    outb(0x1F6, ((secno >> 24) & 0xF) | 0xE0);
+    //给读取目标扇区的命令
+    outb(0x1F7, 0x20);                      // cmd 0x20 - read sectors
+
+    // wait for disk to be ready
+    waitdisk();
+
+    // read a sector
+    // 从0x1f0端口读取SECTSIZE字节数到dst的位置,每次读四个字节，读取 SECTSIZE/ 4次。
+    // void insl(unsigned short int port, void *addr, unsigned long int count)
+    insl(0x1F0, dst, SECTSIZE / 4);
+}
+
+/* *
+ * readseg - read @count bytes at @offset from kernel into virtual address @va,
+ * might copy more than asked. 从kernel的offset处读取count byte到va
+ * */
+ // 只是对readseg进行了封装，可以读取指定范围的数据至内存。
+ // 不过，会被以扇区为单位读进去，被“round off”
+ // va是virtual addr
+static void
+readseg(uintptr_t va, uint32_t count, uint32_t offset) {
+	//找到要读的“终点”[最后会将end_va所在的一个扇区大小都占满]
+	uintptr_t end_va = va + count;
+
+    // round down to sector boundary
+    // 找到真正的起点
+    va -= offset % SECTSIZE;
+
+    // translate from bytes to sectors; kernel starts at sector 1
+    // 找到要读的扇区起点，从sector 1开始(因为0被占用了)。
+    // 而传进来的offset是相对于相对于elfhdr（文件头）的地址
+    uint32_t secno = (offset / SECTSIZE) + 1;
+
+    // 依次将对应扇区的内容读入至缓存。va >= end_va时，就是读完了。
+    for (; va < end_va; va += SECTSIZE, secno ++) {
+        readsect((void *)va, secno);
+    }
+}
+```
+
+### 2. bootloader是如何加载ELF格式的OS？
+
+此时只关注`bootmain`函数，我为它添加了注释。
+
+```CQL
+/* bootmain - the entry of bootloader */
+void
+bootmain(void) {
+    // read the 1st page off disk
+    // 抓取elfhdr，用于判断镜像的信息
+    readseg((uintptr_t)ELFHDR, SECTSIZE * 8, 0);
+
+    // is this a valid ELF?
+    // header结构体中有 magic这个属性，判断它是不是等于ELF_MAGIC以确定它的格式
+    if (ELFHDR->e_magic != ELF_MAGIC) {
+        goto bad;  //不是则出错
+    }
+
+	//操作系统中的信息不是一个结构体就能搞定的；其中不同的段需要载入不同的地方。
+	//header中存了program header表的指针，program header就是用来描述这些子program的“descriptor”
+    struct proghdr *ph, *eph;
+	
+    // load each program segment (ignores ph flags)
+    //加载programheader表的起点，并依次遍历到终点
+    ph = (struct proghdr *)((uintptr_t)ELFHDR + ELFHDR->e_phoff);
+    eph = ph + ELFHDR->e_phnum;
+    
+    //每一个都按照相应的需求载入内存：相对文件头的偏移，占用字节数，和起始地址(已经是虚拟地址了！！)。
+    for (; ph < eph; ph ++) {
+        readseg(ph->p_va & 0xFFFFFF, ph->p_memsz, ph->p_offset);
+    }
+
+    // call the entry point from the ELF header
+    // note: does not return
+    // 载入全部完成，根据elfheader中entry，找到内核入口，过去执行，bootloader的使命完成。
+    ((void (*)(void))(ELFHDR->e_entry & 0xFFFFFF))();
+
+bad:
+    outw(0x8A00, 0x8A00);
+    outw(0x8A00, 0x8E00);
+
+    /* do nothing */
+    while (1);
+}
+```
+
