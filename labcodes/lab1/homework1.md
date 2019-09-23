@@ -273,7 +273,7 @@ IN:
 
 首先分析输出与`bootblock.asm`的关系。`bootblock.asm`中注明的地址范围为`7c00`至`7d80`，输出中搜索这两处地址，查看其间代码，发现除了指令名称稍有修改，其他是完全符合的。也可以发现，实际上只执行了部分的`bootmain`段的代码，就进行了跳转。
 
-> 差别大概就是`mov` 和 `movl`的差别
+> 差别大概就是`mov` 和 `movl`的差别。
 
 #### 3.2 `obj/bootblock.asm` 与 `boot/bootasm.S`
 
@@ -333,3 +333,124 @@ IN:
 > end
 > ```
 
+## 练习三：分析bootloader进入保护模式的过程。
+
+bootloader的第一任务是启用保护模式，并启用分段机制。其实就是分析`boot/bootasm.S`的作用。下面对这个文件进行注释。
+
+> A20：为了向下兼容，模仿地址“回绕”特征，出现了A20 Gate，通过键盘控制器的一个输出与A20地址线控制一直进行与操作。为了不回卷（在实模式下访问高内存区，与保护模式），这个开关要打开。
+>
+> GDT：在保护模式下，为了更好地管理4G的可寻址（物理地址）空间，采用了分段存储管理机制，以支持存储共享、保护、虚拟存储等。每个段以起始地址和长度限制表示（它还包含一些属性，如粒度、类型、特权级、存在位、已访问位）。GDT是全局段描述符表，分段地址转换是需要访问它，取段基址。像是data segment，code segment，就是由此管理。
+>
+> > GDTR 为GDT特殊系统段
+
+```assembly
+#include <asm.h>  # asm.h 包含许多的宏定义，包括常量和“函数”（应该是地址转换的函数）。
+
+# Start the CPU: switch to 32-bit protected mode, jump into C.
+# The BIOS loads this code from the first sector of the hard disk into
+# memory at physical address 0x7c00 and starts executing in real mode
+# with %cs=0 %ip=7c00.
+
+# 内核代码段段地址[段选择器]
+.set PROT_MODE_CSEG,        0x8                     # kernel code segment selector
+# 内核Data段段地址[段选择器]
+.set PROT_MODE_DSEG,        0x10                    # kernel data segment selector
+# 保护模式的flag
+.set CR0_PE_ON,             0x1                     # protected mode enable flag
+
+# start address should be 0:7c00, in real mode, the beginning address of the running bootloader
+.globl start
+start:
+# 在16位模式下，首先关闭中断
+.code16                                             # Assemble for 16-bit mode
+    cli                                             # Disable interrupts
+    cld                                             # String operations increment
+# 将段选择器置0
+    # Set up the important data segment registers (DS, ES, SS).
+    xorw %ax, %ax                                   # Segment number zero
+    movw %ax, %ds                                   # -> Data Segment
+    movw %ax, %es                                   # -> Extra Segment
+    movw %ax, %ss                                   # -> Stack Segment
+
+    # Enable A20:
+    #  For backwards compatibility with the earliest PCs, physical
+    #  address line 20 is tied low, so that addresses higher than
+    #  1MB wrap around to zero by default. This code undoes this.
+# 启用A20
+seta20.1:
+# 等待键盘缓冲区为空，再给键盘发信号
+    inb $0x64, %al                                  # Wait for not busy(8042 input buffer empty).
+    testb $0x2, %al
+    jnz seta20.1
+
+# 向0x64端口发送指令，告诉它要写它的P2
+    movb $0xd1, %al                                 # 0xd1 -> port 0x64
+    outb %al, $0x64                                 # 0xd1 means: write data to 8042's P2 port
+
+seta20.2:
+    inb $0x64, %al                                  # Wait for not busy(8042 input buffer empty).
+    testb $0x2, %al
+    jnz seta20.2
+# 在键盘不忙的时候（检查键盘的status register），写键盘的input buffer，将A20位置为高电平
+    movb $0xdf, %al                                 # 0xdf -> port 0x60
+    outb %al, $0x60                                 # 0xdf = 11011111, means set P2's A20 bit(the 1 bit) to 1
+
+    # Switch from real to protected mode, using a bootstrap GDT
+    # and segment translation that makes virtual addresses
+    # identical to physical addresses, so that the
+    # effective memory map does not change during the switch.
+    
+    # lgdt -> 加载全局段描述符
+    lgdt gdtdesc
+    
+    # 将cr0寄存器中PE对应位置位1，开启保护模式。然后去保护模式对应代码处。
+    movl %cr0, %eax
+    orl $CR0_PE_ON, %eax
+    movl %eax, %cr0
+
+    # Jump to next instruction, but in 32-bit code segment.
+    # Switches processor into 32-bit mode.
+    ljmp $PROT_MODE_CSEG, $protcseg
+
+.code32                                             # Assemble for 32-bit mode
+protcseg:
+    # Set up the protected-mode data segment registers
+    # 初始化每个段寄存器。但不知道为何都用data segment地址初始化？
+    movw $PROT_MODE_DSEG, %ax                       # Our data segment selector
+    movw %ax, %ds                                   # -> DS: Data Segment
+    movw %ax, %es                                   # -> ES: Extra Segment
+    movw %ax, %fs                                   # -> FS
+    movw %ax, %gs                                   # -> GS
+    movw %ax, %ss                                   # -> SS: Stack Segment
+
+    # Set up the stack pointer and call into C. The stack region is from 0--start(0x7c00)
+    # 栈指针初始化未$0x7c00，并进入bootmain。
+    movl $0x0, %ebp
+    movl $start, %esp
+    call bootmain
+
+    # If bootmain returns (it shouldn't), loop.
+spin:
+    jmp spin
+
+# Bootstrap GDT
+.p2align 2                                          # force 4 byte alignment
+gdt:
+	# 空段描述符
+    SEG_NULLASM                                     # null seg
+    # 放bootloader，kernel 的 code seg
+    SEG_ASM(STA_X|STA_R, 0x0, 0xffffffff)           # code seg for bootloader and kernel
+    # 放bootloader，kernel 的 data seg
+    SEG_ASM(STA_W, 0x0, 0xffffffff)                 # data seg for bootloader and kernel
+
+gdtdesc:  # gdt的描述符：长度与起始位置
+    .word 0x17                                      # sizeof(gdt) - 1
+    .long gdt                                       # address gdt
+
+```
+
+疑惑：
+
+1. 保护模式下段寄存器的初始化
+
+> 另有一些硬件细节被暂时忽略了，就看了和做作业有关的部分。。用到了会再看。。

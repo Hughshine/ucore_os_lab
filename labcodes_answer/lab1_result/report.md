@@ -1,4 +1,4 @@
-# Lab1 erport
+# Lab1 report
 
 ## [练习1]
 
@@ -76,7 +76,7 @@ bin/ucore.img
 |	|	-m <emulation>  模拟为i386上的连接器
 |	|	-nostdlib  不使用标准库
 |	|	-N  设置代码段和数据段均可读写
-|	|	-e <entry>  指定入口
+|	|	-e <entry>  指定入口 
 |	|	-Ttext  制定代码段开始位置
 |	|
 |	| 拷贝二进制代码bootblock.o到bootblock.out
@@ -154,7 +154,7 @@ bin/ucore.img
 [练习2.1] 从 CPU 加电后执行的第一条指令开始,单步跟踪 BIOS 的执行。
 
 练习2可以单步跟踪，方法如下：
- 
+
 1 修改 lab1/tools/gdbinit,内容为:
 ```
 set architecture i8086
@@ -201,7 +201,7 @@ si
 	x /2i $pc  //显示当前eip处的汇编指令
 	set architecture i386  //设置当前调试的CPU是80386
 ```
-	
+
 运行"make debug"便可得到
 
 ```
@@ -501,10 +501,10 @@ call指令压栈，所以bootmain中ebp为0x7bf8。
 当内核初始完毕后，可从内核态返回到用户态的函数，而用户态的函数又通过系统调用得到内核态的服务
 
 在idt_init中，将用户态调用SWITCH_TOK中断的权限打开。
-	SETGATE(idt[T_SWITCH_TOK], 1, KERNEL_CS, __vectors[T_SWITCH_TOK], 3);
+​	SETGATE(idt[T_SWITCH_TOK], 1, KERNEL_CS, __vectors[T_SWITCH_TOK], 3);
 
 在trap_dispatch中，将iret时会从堆栈弹出的段寄存器进行修改
-	对TO User
+​	对TO User
 ```
 	    tf->tf_cs = USER_CS;
 	    tf->tf_ds = USER_DS;
