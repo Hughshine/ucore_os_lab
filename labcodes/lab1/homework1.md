@@ -344,6 +344,10 @@ bootloader的第一任务是启用保护模式，并启用分段机制。其实�
 > GDT：在保护模式下，为了更好地管理4G的可寻址（物理地址）空间，采用了分段存储管理机制，以支持存储共享、保护、虚拟存储等。每个段以起始地址和长度限制表示（它还包含一些属性，如粒度、类型、特权级、存在位、已访问位）。GDT是全局段描述符表，分段地址转换是需要访问它，取段基址。像是data segment，code segment，就是由此管理。
 >
 > > GDTR 为GDT特殊系统段
+> >
+> > 为什么GDT的第0项是空描述符：
+> >
+> > 一个任务使用的所有段都是系统全局的，它不需要用LDT来存储私有段信息，当系统切换到这种任务时，会将LDTR寄存器赋值成一个空（全局描述符）选择子，选择子的描述符索引值为0，TI指示位为0，RPL可以为任意值，用这种方式表明当前任务没有LDT。这里的空选择子因为TI为0，所以它实际上指向了GDT的第0项描述符。所以第0项需要时空的，而LDT就不需要。
 
 ```assembly
 #include <asm.h>  # asm.h 包含许多的宏定义，包括常量和“函数”（应该是地址转换的函数）。
@@ -607,9 +611,7 @@ print_stackframe(void) {
             
             cprintf("\n");   
             // 根据输出eip输出函数的debug信息，如调用到什么函数的第几行，函数名等
-            // 因为eip总是存的下一执行语句的位置，所以要减掉1（这里的1，就是1byte）
-            // [但是一个语句的长度不是确定的呀]，问题。
-            // [感觉可能因为在找c中的执行位置，粒度不需要到具体的汇编代码]
+            // 因为eip总是存的下一执行语句的位置，所以要减掉1（这里的1，就是1byte，应该是因为call函数就是1byte），所以找到了被调用的函数的入口地址
             // 这里就需要看 debuginfo_eip() 等的函数了，但是看着头疼，不看了。
             print_debuginfo(eip - 1);
 			
@@ -680,4 +682,130 @@ ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00
 ```
 
 ## 练习六：完善中断初始化和处理
+
+### 1. 中断向量表
+
+> 问题一：中断描述符表中一个表项占多少字节？其中哪几位代表中断处理代码的入口？
+
+一个表项占8个字节，其中0-1两个字节表示段长度限制（IDT limit），2-7字节是基址（IDT Base Address）。2-3是段地址，0-1 + 6-7共同拼成位移。
+
+> 为啥搞这么乱QAQ
+
+```c
+// 变量声明 加冒号的意义是指出"位域长度"。
+/* Gate descriptors for interrupts and traps */
+struct gatedesc {
+    unsigned gd_off_15_0 : 16;        // low 16 bits of offset in segment
+    unsigned gd_ss : 16;            // segment selector [段地址]
+    unsigned gd_args : 5;            // # args, 0 for interrupt/trap gates
+    unsigned gd_rsv1 : 3;            // reserved(should be zero I guess)
+    unsigned gd_type : 4;            // type(STS_{TG,IG32,TG32})
+    unsigned gd_s : 1;                // must be 0 (system)
+    unsigned gd_dpl : 2;            // descriptor(meaning new) privilege level
+    unsigned gd_p : 1;                // Present
+    unsigned gd_off_31_16 : 16;        // high bits of offset in segment
+};
+```
+
+> * Interrupt-gate descriptor （中断方式用到）
+>
+> - Trap-gate descriptor（系统调用用到）
+
+### 2. 完善`trap.c`中`idt_init()`
+
+这一段有一点点乱。`tools/vector.c`笨拙的生成了`vector.S`，可以直接通过extern使用。（因为它被设置为全局变量`.global`）。然后取查`SETGATE`的参数含义，在`memlayout.h`中，定义了全局描述符的宏，也就是我们的第三个参数。至于为什么是`TEXT`，不知道，但是看起来就不像`DATA`。第五个参数是因为还在kernel模式下。别的参数就照着填。
+
+`lidt()`要求传入这个指针，所以直接根据注释提示写上。
+
+```c
+void
+idt_init(void) {
+     extern uintptr_t __vectors[];
+     for (int i = 0; i < 256; ++i)
+     {
+/**
+ *  #define SETGATE(gate, istrap, sel, off, dpl)
+ * Set up a normal interrupt/trap gate descriptor
+ *   - istrap: 1 for a trap (= exception) gate, 0 for an interrupt gate
+ *   - sel: Code segment selector for interrupt/trap handler
+ *   - off: Offset in code segment for interrupt/trap handler
+ *   - dpl: Descriptor Privilege Level - the privilege level required
+ *          for software to invoke this interrupt/trap gate explicitly
+ *          using an int instruction.
+ * */
+         SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
+     }
+     
+ /**
+     static inline void
+    lidt(struct pseudodesc *pd) { // 要求传入pseudodesc的指针
+        asm volatile ("lidt (%0)" :: "r" (pd));
+    }
+ */
+ // 初始化ldt
+     lidt(&idt_pd);
+}
+```
+
+### 3. 完善`trap.c`中`trap()`的时钟中断处理
+
+实际上对于中断信号的处理被转交到`trap_dispatch()`. 在对应分支加上下面这段。其中`ticks`是在`clock.c`中定义的，中断频率`frequency`也可以在这设置。
+
+```c
+...
+ticks ++;
+if (ticks % TICK_NUM == 0) {
+    print_ticks();
+}
+```
+
+此时执行`make qemu`。时钟中断与键盘中断都被成功展示。
+
+```
+++ setup timer interrupts
+100 ticks
+100 ticks
+100 ticks
+kbd [105] i
+...
+```
+
+此时把`init.c`中的challenge开启，这个时候`make grade`已经可以得到四十分了。
+
+```c
+//LAB1: CAHLLENGE 1 If you try to do it, uncomment lab1_switch_test()
+// user/kernel mode switch test
+    lab1_switch_test();
+```
+
+```
+(base) mbp-lxy:lab1 lxy$ make grade
+Check Output:            (3.0s)
+  -check ring 0:                             OK
+  -check switch to ring 3:                   WRONG
+   -e !! error: missing '1: @ring 3'
+   !! error: missing '1:  cs = 1b'
+   !! error: missing '1:  ds = 23'
+   !! error: missing '1:  es = 23'
+   !! error: missing '1:  ss = 23'
+
+  -check switch to ring 0:                   OK
+  -check ticks:                              OK
+Total Score: 30/40
+make: *** [grade] Error 1
+```
+
+#### 附：不初始化ldt时操作系统直接退出的问题
+>
+> 疑惑：为什么不初始化ldt时，操作系统会直接退出呢，没有搜索到是在哪里做的检查
+>
+> > 好像是，intr_enable()函数的原因，里面，它调用了`sti`，即启用中断，可能是启用的时候中断向量表没有搞好，操作系统就崩掉了。
+
+## Challenge 
+
+### 1. 
+
+### 2.
+
+
 
