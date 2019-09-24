@@ -580,3 +580,104 @@ bad:
 }
 ```
 
+## 练习五：实现函数调用堆栈跟踪函数
+
+以以下方式实现。
+
+```c
+void
+print_stackframe(void) {
+	// ebp即为基指针，通过它可以一层一层的找到栈中各函数的调用信息
+	// eip是下一步代码执行的位置
+	// 现在它们被初始化。
+         uint32_t ebp = read_ebp();
+         uint32_t eip = read_eip();
+
+         for(int i=0; i<STACKFRAME_DEPTH; i++) {
+            /*按照16进制输出，补齐8位的宽度，补齐位为0，默认右对齐*/
+            cprintf("ebp:0x%08x ", ebp);
+            cprintf("eip:0x%08x ", eip);
+            
+			// 找到该函数的参数的起点，并强制转换为（4 bytes）指针形式
+            uint32_t *args = (uint32_t *)ebp + 2;  // 所以只需要加2，ebp + 1 为返回地址
+            // 输出连续的四个int空间的参数
+            for(int j=0;j<4;j++) {
+                cprintf("args[%d]:0x%08x ", j, args[j]);
+            }
+            
+            cprintf("\n");   
+            // 根据输出eip输出函数的debug信息，如调用到什么函数的第几行，函数名等
+            // 因为eip总是存的下一执行语句的位置，所以要减掉1（这里的1，就是1byte）
+            // [但是一个语句的长度不是确定的呀]，问题。
+            // [感觉可能因为在找c中的执行位置，粒度不需要到具体的汇编代码]
+            // 这里就需要看 debuginfo_eip() 等的函数了，但是看着头疼，不看了。
+            print_debuginfo(eip - 1);
+			
+			// 去找下一层
+            eip = ((uint32_t *)ebp)[1];
+            ebp = ((uint32_t *)ebp)[0];
+         }
+}
+```
+
+这张示意图比较重要：
+
+```
++|  栈底方向        | 高位地址
+ |    ...        |
+ |    ...        |
+ |  参数3        |
+ |  参数2        |
+ |  参数1        |  [ebp] + 8 
+ |  返回地址        | [ebp] + 4 -> 入栈前的eip
+ |  上一层[ebp]    | <-------- [ebp]
+ |  局部变量        |  低位地址
+```
+
+输出是对的，可以发现ebp每次高16的地址，当然并不知道原因。参数数量取4取多了。
+
+```
+ebp:0x00007b28 eip:0x00100980 args[0]:0x00010074 args[1]:0x00010074 args[2]:0x00007b58 args[3]:0x0010008e 
+    kern/debug/kdebug.c:306: print_stackframe+21
+ebp:0x00007b38 eip:0x00100c78 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00007ba8 
+    kern/debug/kmonitor.c:125: mon_backtrace+10
+ebp:0x00007b58 eip:0x0010008e args[0]:0x00000000 args[1]:0x00007b80 args[2]:0xffff0000 args[3]:0x00007b84 
+    kern/init/init.c:48: grade_backtrace2+33
+ebp:0x00007b78 eip:0x001000b8 args[0]:0x00000000 args[1]:0xffff0000 args[2]:0x00007ba4 args[3]:0x00000029 
+    kern/init/init.c:53: grade_backtrace1+38
+ebp:0x00007b98 eip:0x001000d7 args[0]:0x00000000 args[1]:0x00100000 args[2]:0xffff0000 args[3]:0x0000001d 
+    kern/init/init.c:58: grade_backtrace0+23
+ebp:0x00007bb8 eip:0x001000fd args[0]:0x001032fc args[1]:0x001032e0 args[2]:0x0000130a args[3]:0x00000000 
+    kern/init/init.c:63: grade_backtrace+34
+ebp:0x00007be8 eip:0x00100051 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00007c4f 
+    kern/init/init.c:28: kern_init+80
+ebp:0x00007bf8 eip:0x00007d70 args[0]:0xc031fcfa args[1]:0xc08ed88e args[2]:0x64e4d08e args[3]:0xfa7502a8 
+    <unknow>: -- 0x00007d6f --
+ebp:0x00000000 eip:0x00007c4f args[0]:0xf000e2c3 args[1]:0xf000ff53 args[2]:0xf000ff53 args[3]:0xf000ff54 
+    <unknow>: -- 0x00007c4e --
+ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00000000 
+    <unknow>: -- 0xf000ff52 --
+ebp:0x00000000 eip:0x00000000 args[0]:0xf000e2c3 args[1]:0xf000ff53 args[2]:0xf000ff53 args[3]:0xf000ff54 
+    <unknow>: -- 0xffffffff --
+ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00000000 
+    <unknow>: -- 0xf000ff52 --
+ebp:0x00000000 eip:0x00000000 args[0]:0xf000e2c3 args[1]:0xf000ff53 args[2]:0xf000ff53 args[3]:0xf000ff54 
+    <unknow>: -- 0xffffffff --
+ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00000000 
+    <unknow>: -- 0xf000ff52 --
+ebp:0x00000000 eip:0x00000000 args[0]:0xf000e2c3 args[1]:0xf000ff53 args[2]:0xf000ff53 args[3]:0xf000ff54 
+    <unknow>: -- 0xffffffff --
+ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00000000 
+    <unknow>: -- 0xf000ff52 --
+ebp:0x00000000 eip:0x00000000 args[0]:0xf000e2c3 args[1]:0xf000ff53 args[2]:0xf000ff53 args[3]:0xf000ff54 
+    <unknow>: -- 0xffffffff --
+ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00000000 
+    <unknow>: -- 0xf000ff52 --
+ebp:0x00000000 eip:0x00000000 args[0]:0xf000e2c3 args[1]:0xf000ff53 args[2]:0xf000ff53 args[3]:0xf000ff54 
+    <unknow>: -- 0xffffffff --
+ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00000000 args[3]:0x00000000 
+    <unknow>: -- 0xf000ff52 --
+```
+
+## 练习六：完善中断初始化和处理
+
