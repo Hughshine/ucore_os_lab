@@ -430,7 +430,7 @@ protcseg:
     movw %ax, %ss                                   # -> SS: Stack Segment
 
     # Set up the stack pointer and call into C. The stack region is from 0--start(0x7c00)
-    # 栈指针初始化未$0x7c00，并进入bootmain。
+    # 栈指针初始化为$0x7c00，并进入bootmain。
     movl $0x0, %ebp
     movl $start, %esp
     call bootmain
@@ -462,8 +462,6 @@ gdtdesc:  # gdt的描述符：长度与起始位置
 > 另有一些硬件细节被暂时忽略了，就看了和做作业有关的部分。。用到了会再看。。
 
 ## 练习四：分析bootloader加载elf格式os的过程。
-
-- bootloader是如何加载ELF格式的OS？
 
 概念说明：
 
@@ -591,7 +589,7 @@ bad:
 ```c
 void
 print_stackframe(void) {
-	// ebp即为基指针，通过它可以一层一层的找到栈中各函数的调用信息
+	// ebp即为基指针（该指针永远指向系统栈最上面一个栈帧的底部），通过它可以一层一层的找到栈中各函数的调用信息
 	// eip是下一步代码执行的位置
 	// 现在它们被初始化。
          uint32_t ebp = read_ebp();
@@ -715,6 +713,8 @@ struct gatedesc {
 
 这一段有一点点乱。`tools/vector.c`笨拙的生成了`vector.S`，可以直接通过extern使用。（因为它被设置为全局变量`.global`）。然后取查`SETGATE`的参数含义，在`memlayout.h`中，定义了全局描述符的宏，也就是我们的第三个参数。至于为什么是`TEXT`，不知道，但是看起来就不像`DATA`。第五个参数是因为还在kernel模式下。别的参数就照着填。
 
+> trapframe是在栈中描述当前被打断程序的数据结构。
+
 `lidt()`要求传入这个指针，所以直接根据注释提示写上。
 
 ```c
@@ -800,12 +800,325 @@ make: *** [grade] Error 1
 > 疑惑：为什么不初始化ldt时，操作系统会直接退出呢，没有搜索到是在哪里做的检查
 >
 > > 好像是，intr_enable()函数的原因，里面，它调用了`sti`，即启用中断，可能是启用的时候中断向量表没有搞好，操作系统就崩掉了。
+>
+>嵌入asm时，volatile表示` the instruction has important side-effects.`gcc 就不会对它做更多操作。[here](<https://stackoverflow.com/questions/14449141/the-difference-between-asm-asm-volatile-and-clobbering-memory>).
 
 ## Challenge 
 
-### 1. 
+### 1. 用户态与核模式的相互切换
 
-### 2.
+用户态与与核模式见的相互切换，主要见于系统调用，即 system call。用户应用程序调用内核的接口，以完成如I/O的任务。system call 被认为是需主动调用的中断例程。
 
+要完成的两个中断，就是用户态与核模式的相互切换。相互切换主要经过以下步骤：
 
+* 切换到内核栈
+* 保存EFLAGS，代码段选择器和EIP被保存，堆栈段选择器和堆栈指针被保存
+* 开始执行中断处理程序
+* 通用寄存器被保存(处理程序的工作)，段选择器更改为内核选择器(处理程序的工作)
 
+ucore中优先级有两种（0（内核态）和3（用户态））。
+
+跟权限直接相关的寄存器有RPL（请求特权级，Requested Privilege Level（in data segment selector）），CPL（当前特权级，current privilege level，in cs reg），DPL（描述符特权级，Descriptor Privilege Level）。需要RPL 与 CPL 都比 DPL小，权限才被允许。
+
+观察代码可以发现，中断向量最终全部调用`trapentry.S`中的`__alltraps`，我分析一下在这里都做了什么。
+
+```assembly
+# i'm trapentry.S
+#include <memlayout.h>
+
+# vectors.S sends all traps here.
+.text
+.globl __alltraps
+__alltraps:
+    # push registers to build a trap frame
+    # therefore make the stack look like a struct trapframe
+    # 保存16位寄存器。
+    # 注意 pushl，入栈32位，多余的16位是"padding"
+    pushl %ds
+    pushl %es
+    pushl %fs
+    pushl %gs
+    # 保存eflags，和32位寄存器
+    pushal 
+    # 以上，这些寄存器按顺序入栈，正好看起来和trapframe一样。
+
+    # load GD_KDATA into %ds and %es to set up data segments for kernel
+    # GD_KDATA是kernel data segment的描述符，将它存入ds(data segment)和es(附加段寄存器)
+    movl $GD_KDATA, %eax
+    movw %ax, %ds
+    movw %ax, %es
+
+	# trap需要一个trapframe的指针作为参数，这里把指针地址传进来。后面继续看了一下trapframe的结构，可以发现它各个属性的顺序设计就是按照以上的入栈顺序。
+    # push %esp to pass a pointer to the trapframe as an argument to trap()
+    pushl %esp
+
+	# 调用trap函数，完全交给软件
+    # call trap(tf), where tf=%esp
+    call trap
+
+	# 将入栈的stack pointer，用户栈指针pop出来
+    # pop the pushed stack pointer
+    popl %esp
+
+	# 通过trapret，中断返回
+    # return falls through to trapret...
+.globl __trapret
+__trapret:
+	# 按照开始入栈顺序恢复现场
+    # restore registers from stack
+    popal
+
+    # restore %ds, %es, %fs and %gs
+    popl %gs
+    popl %fs
+    popl %es
+    popl %ds
+
+	# 观看trapframe的结构可知，硬件在调用__alltraps前将trap number与error code入栈了，这个时候要去掉，因为中断已经完美结束了。
+	# trap
+    # get rid of the trap number and error code
+    addl $0x8, %esp
+    iret
+```
+
+下面是trapframe的结构：
+
+```c
+// 可以看见，在trapentry.S中的__alltraps就是按这个顺序的入栈的！！
+struct trapframe {
+    struct pushregs tf_regs;
+    uint16_t tf_gs; 
+    uint16_t tf_padding0;
+    uint16_t tf_fs;
+    uint16_t tf_padding1;
+    uint16_t tf_es;
+    uint16_t tf_padding2;
+    uint16_t tf_ds;
+    uint16_t tf_padding3;
+    uint32_t tf_trapno;
+    /* below here defined by x86 hardware */
+    uint32_t tf_err;
+    uintptr_t tf_eip;
+    uint16_t tf_cs;
+    uint16_t tf_padding4;
+    uint32_t tf_eflags;
+    /* below here only when crossing rings, such as from user to kernel */
+    uintptr_t tf_esp;
+    uint16_t tf_ss;
+    uint16_t tf_padding5;
+} __attribute__((packed));
+// 还可以看到pushal push 的寄存器，它们没有在trapframe中，所以tf中下面那些东西，都应该是操作系统调用中断时入栈的 TODO
+/* registers as pushed by pushal */
+struct pushregs {
+    uint32_t reg_edi;
+    uint32_t reg_esi;
+    uint32_t reg_ebp;
+    uint32_t reg_oesp;            /* Useless */
+    uint32_t reg_ebx;
+    uint32_t reg_edx;
+    uint32_t reg_ecx;
+    uint32_t reg_eax;
+};
+```
+
+中断中，我们需要做的就是把cs，ss都变成希望转换到的模式的基地址！再改一下控制位`EFLAGs`，更改IO的权限（似乎否则就不能再user状态输出？就无法通过make grade了）。
+
+```c
+case T_SWITCH_TOU:
+        // cprintf("to user mode?");
+        if (tf->tf_cs != USER_CS) { //要保证自己再对应的模式中
+            tf->tf_cs = USER_CS;
+            tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+            tf->tf_eflags |= FL_IOPL_MASK;
+            print_trapframe(tf);
+        }
+        break;
+    case T_SWITCH_TOK:
+        // cprintf("to kernel mode?");
+        if (tf->tf_cs != KERNEL_CS) {
+            tf->tf_cs = KERNEL_CS;
+            tf->tf_ds = tf->tf_es = KERNEL_DS;
+            tf->tf_eflags &= ~FL_IOPL_MASK;
+        }
+        break;
+```
+
+以及在ldt初始化的时候，更改“转到kernel中断”的DPL为user，否则User就执行不了它了，只能kernel转kernel（滑稽）。
+
+```c
+void
+idt_init(void) {
+	//...
+	SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_USER);
+	//...
+}
+```
+
+最终在`/kern/init/init.c`中加入主动调用system call的汇编代码。
+
+```c
+static void
+lab1_switch_to_user(void) {
+    //LAB1 CHALLENGE 1 : 
+     asm volatile (
+	    "sub $0x8, %%esp \n"  // 这里为什么要减8？为什么要"movl %%ebp, %%esp"？下面分解。
+	    "int %0 \n" //%0 为 T_SWITCH_TOU 参数
+	    "movl %%ebp, %%esp"
+	    : 
+	    : "i"(T_SWITCH_TOU)
+	);
+}
+
+static void
+lab1_switch_to_kernel(void) {
+    // 引发对应的中断（T_SWITCH_TOK）
+    asm volatile ( 
+        "int %0 \n"
+        "movl %%ebp, %%esp \n"
+        : 
+        : "i"(T_SWITCH_TOK)
+    );
+}
+```
+
+上面的代码还有两个地方要解释，都是跟收到中断时的一些默认操作有关。
+
+1. 为何（只）切换到user mode前要将esp减8？
+2. 切换回来为什么要`movl %ebp, esp`？
+
+> 原因？就是这个中断太讨厌了，一般操作一个中断，硬件的设计是默认调用中断前后特权级是相同的，它对栈的转换操作就不会出问题。而实验要求正好要违背它，所以要反其道而行。[reference1](<https://chyyuu.gitbooks.io/ucore_os_docs/content/lab1/lab1_3_3_2_interrupt_exception.html>)，[reference2](<https://howardlau.me/university/ucore/ucore-os-lab-1.html>)，[reference3](<https://www.cnblogs.com/xxrxxr/p/9527344.html>)。
+
+在用户态切换到内核态，由于要求转变至高权限，会发生栈切换，原来的ss，esp都被入栈，ss段自动被切换至内核的段选择子。而在中断返回时，由于特权级别已经为内核态，所以不会出栈ss，esp，所以不需要对此步骤调整。
+
+在高优先级转换到低优先级时，iret还会把入栈的ss，esp出栈（其实根本没有入过栈！）！所以在转换到用户态时，需要多留出8bytes，以保证正常的还原。
+
+所以我们的sp究竟用什么赋值呢，调用中断后的帧基址就是此时的栈顶呀。（应该是这个意思吧）
+
+> 希望我理解的是对的QAQ
+
+此时`make grade`已经是40分啦！
+
+```shell
+(base) mbp-lxy:lab1 lxy$ make grade
+Check Output:            (2.0s)
+  -check ring 0:                             OK
+  -check switch to ring 3:                   OK
+  -check switch to ring 0:                   OK
+  -check ticks:                              OK
+Total Score: 40/40
+```
+
+### 2. 基于键盘中断的内核态切换
+
+实现方式，直接在键盘中断处增加对输入字符的检查即可。模式切换直接赋值Challenge1中代码即可。
+
+```c
+case IRQ_OFFSET + IRQ_KBD:
+        c = cons_getc();
+        if (c == '0')
+        {
+            if (tf->tf_cs != KERNEL_CS) {
+                tf->tf_cs = KERNEL_CS;
+                tf->tf_ds = tf->tf_es = KERNEL_DS;
+                tf->tf_eflags &= ~FL_IOPL_MASK;
+                cprintf("--------switching to kernel mode--------");
+                print_trapframe(tf);// 输出此时trapframe的具体信息
+            }// to kernel mode
+        }
+        if (c == '3')
+        {
+            if (tf->tf_cs != USER_CS) {
+                tf->tf_cs = USER_CS;
+                tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+                tf->tf_eflags |= FL_IOPL_MASK;
+                cprintf("--------switching to user mode--------");
+                print_trapframe(tf);// 输出此时trapframe的具体信息
+            }  // to user mode
+        }
+        cprintf("kbd [%03d] %c\n", c, c);
+        break;
+```
+
+根据makefile中的相应检查可知，用户态与核模式的检查标准如下。
+
+```shell
+quick_check 'check switch to ring 3'							\
+	'+++ switch to  user  mode +++'								\
+	'1: @ring 3'												\
+	'1:  cs = 1b'												\
+	'1:  ds = 23'												\
+	'1:  es = 23'												\
+	'1:  ss = 23'
+
+quick_check 'check switch to ring 0'							\
+	'+++ switch to kernel mode +++'								\
+	'2: @ring 0'												\
+	'2:  cs = 8'												\
+	'2:  ds = 10'												\
+	'2:  es = 10'												\
+	'2:  ss = 10'
+```
+
+实际输出为以下，相应寄存器与检查标准相同，可知测试正确。
+
+```c
+--------switching to kernel mode--------trapframe at 0x110cd4
+  edi  0x00000000
+  esi  0x00010074
+  ebp  0x00007be8
+  oesp 0x00110cf4
+  ebx  0x00010074
+  edx  0x00103687
+  ecx  0x00000000
+  eax  0x00000003
+  ds   0x----0010
+  es   0x----0010
+  fs   0x----0023
+  gs   0x----0023
+  trap 0x00000021 Hardware Interrupt
+  err  0x00000000
+  eip  0x0010006f
+  cs   0x----0008
+  flag 0x00000206 PF,IF,IOPL=0
+  
+  --------switching to user mode--------trapframe at 0x7b7c
+  edi  0x00000000
+  esi  0x00010074
+  ebp  0x00007be8
+  oesp 0x00007b9c
+  ebx  0x00010074
+  edx  0x00103687
+  ecx  0x00000000
+  eax  0x00000003
+  ds   0x----0023
+  es   0x----0023
+  fs   0x----0023
+  gs   0x----0023
+  trap 0x00000021 Hardware Interrupt
+  err  0x00000000
+  eip  0x0010006f
+  cs   0x----001b
+  flag 0x00003206 PF,IF,IOPL=3
+  esp  0x0010363c
+  ss   0x----0023
+```
+
+***
+
+## 结语
+
+> 撒花。
+
+做了很久很久，用了得20个小时吧。在没有背景知识下，没头脑的乱做，很耽误时间费精力。（递归学习QAQ）。很多地方参考了答案代码，但力求自己理解其中每一个语句，并以自己的方式实现。
+
+应该先做的事：
+
+1. 看对应内容的慕课（清华大学的那个就好）
+
+2. 对每个练习所涉及的知识，认真看它的文档。（基本上所有的都是有用的QAQ，尤其是challenge部分）
+
+先这个样子叭。
+
+## CHANGELOG
+
+20190926 晚 23:46 更新lab1完整版
