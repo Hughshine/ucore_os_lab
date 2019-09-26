@@ -10,7 +10,7 @@ __alltraps:
     pushl %es
     pushl %fs
     pushl %gs
-    pushal
+    pushal 
 
     # load GD_KDATA into %ds and %es to set up data segments for kernel
     movl $GD_KDATA, %eax
