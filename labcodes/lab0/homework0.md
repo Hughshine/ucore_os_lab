@@ -6,6 +6,18 @@
 >
 > 没有整理格式，还请谅解。
 
+[TOC]
+
+## 作业要求：吐槽
+
+做的太久了，基本都忘了。
+
+1. 若之前没有了解过linux相关，感觉会死掉；感觉大一大二的学习的深度不够，衔接的也不够好【至少是我们这一级】
+2. 对mac系统非常不友好，没多少空间，虚拟机用的还不习惯，复制粘贴等都不能跨软件，vpn也麻烦
+3. 嘤
+4. 耐下心来过了一遍lab1，感觉很多事情就豁然开朗了
+5. 编不下去了
+
 ## techniques
 
 ```
@@ -16,18 +28,20 @@ make grade 测试是否基本正确
 
 ## First: some useful linux( ubuntu ) features: 
 
-**重定向：** 
+### 重定向：
+
 ```
 command >>      filename #接在末尾
 ls > test.tx t覆盖 
 ```
 
-**管道：**
+### 管道：
+
 ```
 ls -l | less 
 ```
 
-**后台进程：**
+### 后台进程：
 
 ```
 【cli不是串行的】sleep 10 & ls ; 
@@ -42,7 +56,7 @@ ps: processes status
 
 ```
 
-**软件包管理（ubuntu）：**
+### 软件包管理（ubuntu）：
 
 ```
 apt-get 适用于      deb包管理式的操作系统
@@ -63,29 +77,29 @@ ubuntu软件包获取依赖升级源，可以以root权限修改 /etc/apt/source
 
  
 
-man <command> 
+### man <command> 
 
  
 
-diff & patch
+### diff & patch
 
  
 
-deb 遵循严格的依赖关系（于 Depends 和 Pre-Depends 指定）
+### deb 遵循严格的依赖关系（于 Depends 和 Pre-Depends 指定）
 
  
 
-printf - formatted output
+### printf - formatted output
 
  
 
-vim 的配置文件位置：\.vimrc
+### vim 的配置文件位置：\.vimrc
 
  
 
-- 有关汇编：
+## 有关汇编：
 
-- GNU汇编（assembler）采用的是AT&T汇编格式（gcc），Microsoft  汇编采用Intel格式（VC++）。
+* GNU汇编（assembler）采用的是AT&T汇编格式（gcc），Microsoft  汇编采用Intel格式（VC++）。
 
 - AT&T汇编基本语法：
 
@@ -108,9 +122,7 @@ vim 的配置文件位置：\.vimrc
 - - %num，表示使用寄存器的样板操作数
   - 则使用寄存器需要两个“%”
 
- 
-
-<https://www.cnblogs.com/hdk1993/p/4820353.html>
+>  <https://www.cnblogs.com/hdk1993/p/4820353.html>
 
  
 
@@ -132,11 +144,12 @@ how to use inline assembly in gcc
 
 - GNU  make, makefile 
 
-- 
 
-- makefile 的简单规则：
 
-- 
+
+
+
+## makefile 的简单规则：
 
 - target ... :  prerequisites  ...
 
@@ -154,13 +167,12 @@ how to use inline assembly in gcc
 
 - - 如果这个工程没有编译过，那么我们的所有c文件都要编译并被链接。
   - 如果这个工程的某几个c文件被修改，那么我们只编译被修改的c文件，并链接目标程序。
-  - 如果这个工程的头文件被改变了，那么我们需要编译引用了这几个头文件的c文件，并链接目标程序。
+  - 如果这个工程的头文件被改变了，那么我们需要编译引用了这几个头文件的c文件，并链接目标程序。 
 
-- 
 
- 
 
-gdb使用：GNU软件系统中的标准侦错器。
+
+## gdb使用：GNU软件系统中的标准侦错器。
 
 - 调试前，必须使用-g /      -ggdb 编译源文件。
 - gdb      bugging【加载可执行文件】
@@ -208,7 +220,7 @@ gdb -tui
 
  
 
-\## 基于硬件模拟器的源码级调试
+## 基于硬件模拟器的源码级调试
 
 qemu 可以加载镜像文件，并设定以视为什么镜像、作为哪块硬盘的镜像、外接设备设置、虚存大小等等
 
@@ -220,9 +232,7 @@ qemu 能做的事：跟断点有关的事；跟内存有关的事【输出到文
 
 - qemu无法在哪里都可以运行，但是已经安装好了。ubuntu 上还没好用。
 
-- 【mac上似乎好用了】
-
--  
+- 【mac上似乎好用了】 
 
 - wget 怎么报错了【重装了一下，好了。【library not loaded】
 
@@ -271,7 +281,7 @@ gdb 结合 qemu做调试
 
  
 
-内核对于操作系统【它俩究竟是啥关系？】：
+### 内核对于操作系统【它俩究竟是啥关系？】：
 
 现代[操作系统](https://baike.baidu.com/item/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F)设计中，为减少系统本身的开销，往往将一些与[硬件](https://baike.baidu.com/item/%E7%A1%AC%E4%BB%B6)紧密相关的（如中断处理程序、[设备驱动程序](https://baike.baidu.com/item/%E8%AE%BE%E5%A4%87%E9%A9%B1%E5%8A%A8%E7%A8%8B%E5%BA%8F)等）、基本的、公共的、运行频率较高的模块（如时钟管理、[进程](https://baike.baidu.com/item/%E8%BF%9B%E7%A8%8B)调度等）以及[关键](https://baike.baidu.com/item/%E5%85%B3%E9%94%AE)性数据结构独立开来，使之常驻内存，并对他们进行保护。通常把这一部分称之为操作系统的[内核](https://baike.baidu.com/item/%E5%86%85%E6%A0%B8)。
 
@@ -283,7 +293,7 @@ gdb 结合 qemu做调试
 
  
 
-为什么运行可执行文件要加 './'：
+### 为什么运行可执行文件要加 './'：
 
 shell会在环境变量包含路径中去找文件。unix/linux因为安全考虑没有将当前路径放入$PATH中.
 
@@ -385,7 +395,7 @@ gdb单独调试的时候，一般是一个加了 -g 的符号文件。我们希�
 
  
 
-- ucore编程方法和通用数据结构：
+## ucore编程方法和通用数据结构：
 
 - - 面向对象编程（类似接口）（在C中表现为一组函数指针的集合）（难点是找到“各种内核子系统的共性访问/操作模式”，以提取函数指针列表）
   - 通用数据结构：双向循环列表
@@ -411,6 +421,8 @@ c中struct只能定义数据成员，不能定义成员函数。【定义函数�
 删除的时候，要重新初始化被删除节点的前向与后向指针，保证其无法在访问表中数据结构。
 
  
+
+## 一些常用的”东西“
 
 elf - executable and linkable format
 
