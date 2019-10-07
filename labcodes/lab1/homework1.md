@@ -6,6 +6,11 @@
 
 ## 练习一：make生成执行文件的过程
 
+> 吐槽：
+>
+> 1. 让直接读makefile，真的很难受很难受的QAQ。就应该用`make -n`，哼。。白白看了好多makefile的知识，变量、函数那些，真的很复杂。。
+> 2. 没有预先学习实验相关内容，会翻来覆去很费时间【所以以后都要先过一遍清华的mooc】
+> 3. 啊，对mac还是很不友好，委屈。下面这个依赖树，我就画了好久。
 
 ### 1.分析ucore.img的生成过程
 
@@ -45,6 +50,8 @@ ld bin/bootblock
 i386-elf-ld -m    elf_i386 -nostdlib -N -e start -Ttext 0x7C00 obj/boot/bootasm.o obj/boot/bootmain.o -o obj/bootblock.o
 # ...
 # objcopy把一种目标文件中的内容复制到另一种类型的目标文件中.
+# .o比较大，.out比较小。。
+# -S  移除所有符号和重定位信息
 i386-elf-objcopy -S -O binary obj/bootblock.o obj/bootblock.out
 # bin/sign对bootblock进行了检查，并生成bin/bootblock
 bin/sign obj/bootblock.out bin/bootblock
@@ -67,6 +74,8 @@ of=<outfile>
 seek=n  # Seek n blocks from the beginning of the output before copying. 
 cov=notrunc  # Do not truncate the output file.
 count=n  # Copy only n input blocks.
+
+另：/dev/zero在类UNIX系统中是一个特殊的设备文件，当你读它的时候，它会提供无限的空字符
 ```
 
 #### 1.2 sign, bootblock, kernal的作用与生成脚本分析
@@ -197,6 +206,11 @@ target: prerequisits
 
 ## 练习二：使用qemu执行并调试lab1中的软件
 
+> 吐槽：
+>
+> 1. 其实，lab1没有怎么用到调试。。看答案 + 瞎猜 ✅。
+> 2. 我想在mac上做试验，就这么难喵？
+
 ###  1. 从第一条指令开始，单步跟踪BIOS的执行。
 
 由于使用mac进行的实验，`make`脚本不兼容，不能直接调用`make debug`，因而查看实际执行的命令。
@@ -224,7 +238,7 @@ set architecture i8086
 target remote :1234
 ```
 
-在`gdb`中使用`si`单步执行，`g.log`中输出为以下。
+在`gdb`中使用`si`单步执行，`q.log`中输出为以下。
 
 ```asm
 ----------------
@@ -273,7 +287,7 @@ IN:
 
 首先分析输出与`bootblock.asm`的关系。`bootblock.asm`中注明的地址范围为`7c00`至`7d80`，输出中搜索这两处地址，查看其间代码，发现除了指令名称稍有修改，其他是完全符合的。也可以发现，实际上只执行了部分的`bootmain`段的代码，就进行了跳转。
 
-> 差别大概就是`mov` 和 `movl`的差别。
+> 差别大概就是`mov` 和 `movl`的差别。【可以算是一个样子的】
 
 #### 3.2 `obj/bootblock.asm` 与 `boot/bootasm.S`
 
@@ -284,14 +298,14 @@ IN:
 ```c
 static void readseg(uintptr_t va, uint32_t count, uint32_t offset) {
 ... // 汇编代码
-// 还没有括号 真的是没头脑/滑稽
+// 还没有括号 真的是没头脑/滑稽[可能是调试信息吧。。]
 ```
 
 ### 4. 自己找一个bootloader或内核中的代码位置，设置断点并进行测试。
 
 想看看bootmain那里在做什么，所以设置了断点：`b *0x7d0f`。
 
-虽然`bootblockl.asm`里面写下一句要`    readseg((uintptr_t)ELFHDR, SECTSIZE * 8, 0);`，但实际上就是在按汇编指令顺序执行：（其实也应该如此，但是不知道readseg为什么要在这里写一次？？认为和上一问的疑惑有关。）
+虽然`bootblock.asm`里面写下一句要`    readseg((uintptr_t)ELFHDR, SECTSIZE * 8, 0);`，但实际上就是在按汇编指令顺序执行：（其实也应该如此，但是不知道readseg为什么要在这里写一次？？认为和上一问的疑惑有关。）
 
 ```
 (gdb) si
@@ -336,6 +350,10 @@ IN:
 > ```
 
 ## 练习三：分析bootloader进入保护模式的过程。
+
+> 吐槽：
+>
+> 1. 就是简单的了解一些硬件信息就好了。。
 
 bootloader的第一任务是启用保护模式，并启用分段机制。其实就是分析`boot/bootasm.S`的作用。下面对这个文件进行注释。
 
@@ -442,7 +460,7 @@ spin:
 # Bootstrap GDT
 .p2align 2                                          # force 4 byte alignment
 gdt:
-	# 空段描述符
+	# 空段描述符，原因前面解释了。
     SEG_NULLASM                                     # null seg
     # 放bootloader，kernel 的 code seg
     SEG_ASM(STA_X|STA_R, 0x0, 0xffffffff)           # code seg for bootloader and kernel
@@ -462,6 +480,11 @@ gdtdesc:  # gdt的描述符：长度与起始位置
 > 另有一些硬件细节被暂时忽略了，就看了和做作业有关的部分。。用到了会再看。。
 
 ## 练习四：分析bootloader加载elf格式os的过程。
+
+> 吐槽：
+>
+> 1. 要记得东西太多了，记不住了，可能会在报告的时候都忘掉QAQ。
+> 2. 这个练习，就是看硬盘的文档，理解段的存储形式。
 
 概念说明：
 
@@ -504,6 +527,7 @@ readsect(void *dst, uint32_t secno) {
 
     // read a sector
     // 从0x1f0端口读取SECTSIZE字节数到dst的位置,每次读四个字节，读取 SECTSIZE/ 4次。
+    // 不记得为什么是
     // void insl(unsigned short int port, void *addr, unsigned long int count)
     insl(0x1F0, dst, SECTSIZE / 4);
 }
@@ -583,6 +607,8 @@ bad:
 ```
 
 ## 练习五：实现函数调用堆栈跟踪函数
+
+> 吐槽：就是看函数调用栈结构。再加上答案代码，直接就能写出来啦。。
 
 以以下方式实现。
 
@@ -681,6 +707,11 @@ ebp:0xf000ff53 eip:0xf000ff53 args[0]:0x00000000 args[1]:0x00000000 args[2]:0x00
 
 ## 练习六：完善中断初始化和处理
 
+> 吐槽：
+>
+> 1. 这个还是要用一些脑汁的TwT，需要用心看每个有关系的c文件，理解里面的代码含义。
+> 2. 看这些文件最大的难点就是，不理解函数的命名潜规则，要熟悉才好。
+
 ### 1. 中断向量表
 
 > 问题一：中断描述符表中一个表项占多少字节？其中哪几位代表中断处理代码的入口？
@@ -770,7 +801,7 @@ kbd [105] i
 ...
 ```
 
-此时把`init.c`中的challenge开启，这个时候`make grade`已经可以得到四十分了。
+此时把`init.c`中的challenge开启，这个时候`make grade`已经可以得到三十分了。
 
 ```c
 //LAB1: CAHLLENGE 1 If you try to do it, uncomment lab1_switch_test()
@@ -806,6 +837,8 @@ make: *** [grade] Error 1
 ## Challenge 
 
 ### 1. 用户态与核模式的相互切换
+
+> 吐槽：认真看文档TwT
 
 用户态与与核模式见的相互切换，主要见于系统调用，即 system call。用户应用程序调用内核的接口，以完成如I/O的任务。system call 被认为是需主动调用的中断例程。
 
@@ -922,7 +955,7 @@ struct pushregs {
 };
 ```
 
-中断中，我们需要做的就是把cs，ss都变成希望转换到的模式的基地址！再改一下控制位`EFLAGs`，更改IO的权限（似乎否则就不能再user状态输出？就无法通过make grade了）。
+中断中，我们需要做的就是把cs，ss都变成希望转换到的模式的基地址！再改一下控制位`EFLAGs`，更改IO的权限（似乎否则就不能在user状态输出？就无法通过make grade了）。
 
 ```c
 case T_SWITCH_TOU:
@@ -1123,3 +1156,5 @@ quick_check 'check switch to ring 0'							\
 ## CHANGELOG
 
 20190926 晚 23:46 更新lab1完整版
+
+20191007 玩 23:36 update 【为什么我要上午去交作业TwT。学姐一定会给我过得叭/滑稽】
