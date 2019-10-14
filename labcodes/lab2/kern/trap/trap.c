@@ -136,7 +136,7 @@ trap_dispatch(struct trapframe *tf) {
 
     switch (tf->tf_trapno) {
     case IRQ_OFFSET + IRQ_TIMER:
-        cprintf("clock ok!");
+        cprintf("clock ok!\n");
         ticks ++;
         if (ticks % TICK_NUM == 0) {
             print_ticks();
