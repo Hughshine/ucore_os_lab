@@ -2,6 +2,36 @@
 
 [TOC]
 
+## 练习零：补充lab1
+
+由于lab1没有entry.S建栈（设置了栈的范围），做一些检查，在`printstackframe()`函数中可以不设置递归终点`ebp!=0`。但是lab2设置了，所以`qemu`会死掉。所以要调整好这里。
+
+手动补充的lab1代码。
+
+```c
+void
+print_stackframe(void) {
+     uint32_t ebp = read_ebp();
+     uint32_t eip = read_eip();
+      /*按照16进制输出，补齐8位的宽度，补齐位为0，默认右对齐*/
+     for(int i=0; ebp != 0&&i<STACKFRAME_DEPTH; i++) {//lab2 change here
+        cprintf("ebp:0x%08x ", ebp);
+        cprintf("eip:0x%08x ", eip);
+
+        uint32_t *args = (uint32_t *)ebp + 2;
+        for(int j=0;j<4;j++) {
+            cprintf("args[%d]:0x%08x ", j, args[j]);
+        }
+
+        cprintf("\n");   
+        print_debuginfo(eip - 1);
+
+        eip = ((uint32_t *)ebp)[1];
+        ebp = ((uint32_t *)ebp)[0];
+     }
+}
+```
+
 ## 练习一：first-fit 物理内存管理
 
 ### 初始化
@@ -183,7 +213,7 @@ default_free_pages(struct Page *base, size_t n) {
 }
 ```
 
-### 优化
+### 可能的优化方式
 
 前面已经对`free`过程查找前后紧邻块做了优化。
 
@@ -202,3 +232,143 @@ check_alloc_page() succeeded!
 
 ## 练习二：实现寻找虚拟地址对应的页表项
 
+寻找页表项步骤：
+
+1. 在一级页表（页目录）中找到它的对应项，如果存在，直接返回。
+
+2. 如果不存在，不要求创建，返回NULL。
+
+3. 如果不存在，要求创建，alloc空间失败，返回NULL
+
+4. 成功拿到一个page，将它清空，并设置它的引用次数为1（在pages数组中）。
+
+5. 并在一级页表中建立该项。最后返回。
+
+   > 注：返回的是pte的虚拟地址，它的计算方法是：
+   >
+   > 找到该线性地址的页目录项 ==> 
+   >
+   > 页目录项的内容为二级页表的地址，将它转换为虚拟地址 ==>
+   >
+   > 根据线性地址在二级页表中的偏移，找到对应页表项地址。
+
+```c
+pte_t *
+get_pte(pde_t *pgdir, uintptr_t la, bool create) {
+    pde_t *pdep = &pgdir[PDX(la)]; // 在以及
+    if(!(*pdep & PTE_P)) // 如果存在，直接返回
+    {   
+        if(!create) // 不要求create，直接返回
+            return NULL;
+        // 否则alloc a page，（成功的话）并设置这个page的ref为1，将内存也清空。
+        struct Page* page = alloc_page(); 
+        if(page == NULL)
+            return NULL;
+        set_page_ref(page, 1); 
+        uintptr_t pa = page2pa(page); // 
+        memset(KADDR(pa), 0, PGSIZE);
+        // 在一级页表中，设置该项
+        *pdep = (pa & ~0xFFF) | PTE_P | PTE_W | PTE_U;
+    }
+    return &((pte_t *)KADDR(PDE_ADDR(*pdep)))[PTX(la)];
+}
+```
+问题：
+
+- 请描述页目录项（Page Directory Entry）和页表项（Page Table Entry）中每个组成部分的含义以及对ucore而言的潜在用处。
+
+  答：由于页目录项、页表项的低12位默认为0，所以可以作为标志字段使用。
+
+  > | 位    | 意义                                                         |
+  > | ----- | ------------------------------------------------------------ |
+  > | 0     | 表项有效标志（PTE_U）// 初始化时设置，”User can access“标志  |
+  > | 1     | 可写标志（PTE_W）// 初始化时设置，”Writeable“标志            |
+  > | 2     | 用户访问权限标志（PTE_P）// 初始化时设置，”Present“标志，常用 |
+  > | 3     | 写入标志（PTE_PWT）                                          |
+  > | 4     | 禁用缓存标志（PTE_PCD）                                      |
+  > | 5     | 访问标志（PTE_A）                                            |
+  > | 6     | 脏页标志（PTE_D）                                            |
+  > | 7     | 页大小标志（PTE_PS）                                         |
+  > | 8     | 零位标志（PTE_MBZ）                                          |
+  > | 11    | 软件可用标志（PTE_AVAIL）                                    |
+  > | 12-31 | 页表起始物理地址/页起始物理地址                              |
+
+- 如果ucore执行过程中访问内存，出现了页访问异常，请问硬件要做哪些事情？
+
+  答：可能出现页异常的情况大致有：没有创建一个虚拟地址到物理地址的映射；创建了映射，但物理页不可写。发生了相应异常后，（也就是一种中断后），会保护CPU现场，分析中断原因，交给缺页中断处理，处理结束后恢复现场。额外的，缺页中断在返回后，需要重新执行产生中断的指令。
+
+  > 参考：[here](<https://www.cnblogs.com/sunsky303/p/9214223.html>)
+
+## 练习三：释放某虚地址所在页并取消对应二级页表项映射
+
+查找步骤：
+
+1. 检查对应二级页表项是否有效，无效则什么都不做。
+2. 否则，对应二级页表的`ref--`，若`ref==0`，`free`该页。
+3. 回写快表，置脏位。
+
+```c
+static inline void
+page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
+    if (*ptep & PTE_P) { // 如果二级页表项存在且有效
+        struct Page *page = pte2page(*ptep); // 找到这个二级页表项对应的page
+        if (page_ref_dec(page) == 0) // 自减该page的ref，如果为0，则free该page
+            free_page(page);
+        *ptep = 0; //将该page table entry置0
+         // 先检查此时cpu使用的一级页表是不是pgdir，如果是，则在快表中，invalidate对应的线性地址。[la 是]
+         // 如果不是，则它根本不在快表中。
+         // 底层调用invlpg，[INVLPG m 使包含 m(地址) 的页对应TLB项目失效]
+         // la应该就是page对应的线性地址吧。。
+        tlb_invalidate(pgdir, la); 
+    }
+}
+```
+
+问题：
+
+* 数据结构Page的全局变量（其实是一个数组）的每一项与页表中的页目录项和页表项有无对应关系？如果有，其对应关系是啥？
+
+  > 答：有关系，每个页表项/页目录项都对应一个物理页，也就对应pages中的一项。
+
+* 如果希望虚拟地址与物理地址相等，则需要如何修改lab2，完成此事？
+
+  > TODO:  [参考了已有内容，没有手动实现，以后再尝试。]
+  >
+  > 1. 修改链接脚本 
+  >
+  > 2. `entry.S`中注释掉unmap va 0~4M
+  >
+  > 3. 修改`memlayout.h`中相关宏定义。 
+  >
+  >    ```c
+  >    #define KERNBASE	0x0
+  >    ```
+
+## `make grade`
+
+已经得到了50分。
+
+```
+(base) mbp-lxy:lab2 lxy$ make grade
+Check PMM:               (3.0s)
+  -check pmm:                                OK
+  -check page table:                         OK
+  -check ticks:                              OK
+Total Score: 50/50
+```
+
+## `总结`
+
+虽然`lab2`practice很少，但是递归学习很费时间，（要先看mooc，有很多参考资料，很多函数、宏需要看明白，并且指针的确是一个很绕的东西！）。
+
+而且lab1 还留了个小bug，为了处理它还用了一段时间QAQ。
+
+challenge先不做了，感觉做不完了。。TwT。。反正也没计入`grade`。
+
+## CHALLENGE
+
+> TODO
+
+## CHANGELOG
+
+20191016，12:27，完成基础practice，算上看慕课的时间大概10h。

@@ -52,7 +52,7 @@ start_probe:
     movl $20, %ecx
     movl $SMAP, %edx  # 调用BIOS中断
     int $0x15
-    jnc cont
+    jnc cont  #
     movw $12345, 0x8000
     jmp finish_probe
 cont:

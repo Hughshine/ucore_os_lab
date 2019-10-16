@@ -16,7 +16,7 @@ static void lab1_switch_test(void);
 
 int
 kern_init(void) {
-    extern char edata[], end[];
+    extern char edata[], end[]; // 这两个变量是在/tools/kernel.ld中定义的，链接时生成。
     memset(edata, 0, end - edata);
 
     cons_init();                // init the console
