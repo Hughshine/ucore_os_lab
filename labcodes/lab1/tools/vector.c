@@ -7,6 +7,10 @@ main(void) {
     printf(".globl __alltraps\n");
 
     int i;
+    /**
+     * 问题：为什么在这几个中断向量要pushl $0？
+     * 可能是这几个终断比较特殊吧。。是异常段。。
+     */
     for (i = 0; i < 256; i ++) {
         printf(".globl vector%d\n", i);
         printf("vector%d:\n", i);

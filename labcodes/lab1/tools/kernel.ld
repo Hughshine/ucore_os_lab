@@ -3,10 +3,14 @@
 
 OUTPUT_FORMAT("elf32-i386", "elf32-i386", "elf32-i386")
 OUTPUT_ARCH(i386)
-ENTRY(kern_init)
+ENTRY(kern_init) // 定义入口函数
 
 SECTIONS {
-	/* Load the kernel at this address: "." means the current address */
+	/* Load the kernel at this (虚拟) address: "." means the current address */
+	/** lab1 建立的是段映射关系为对等关系，所以物理地址也是从0x100000开始 
+	也就是 ucore的入口函数kern_init的起始地址。
+	lab1: virt addr = linear addr = phy addr */
+
 	. = 0x100000;
 
 	.text : {
