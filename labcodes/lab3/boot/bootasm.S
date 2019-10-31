@@ -50,9 +50,9 @@ probe_memory:
 start_probe:
     movl $0xE820, %eax
     movl $20, %ecx
-    movl $SMAP, %edx
+    movl $SMAP, %edx  # 调用BIOS中断
     int $0x15
-    jnc cont
+    jnc cont  #
     movw $12345, 0x8000
     jmp finish_probe
 cont:

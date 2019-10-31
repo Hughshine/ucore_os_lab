@@ -104,6 +104,16 @@ default_init(void) {
     nr_free = 0;
 }
 
+//初始化管理空闲内存页的数据结构
+/**
+ * 根据探测到的空闲物理空间，通过如下语句即可实现空闲标记：
+    //获得空闲空间的起始地址begin和结束地址end
+init_memmap(pa2page(begin), (end - begin) / PGSIZE);
+ */
+/**
+ * 初始化时使用。
+ * 探测到一个基址为base，大小为n 的空间，将它加入list（开始时做一点检查）
+ */
 static void
 default_init_memmap(struct Page *base, size_t n) {
     assert(n > 0);
@@ -116,34 +126,55 @@ default_init_memmap(struct Page *base, size_t n) {
     base->property = n;
     SetPageProperty(base);
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
+    // 按地址序，依次往后排列。因为是双向链表，所以头指针前一个就是最后一个。
+    list_add_before(&free_list, &(base->page_link)); 
 }
 
+// 可以发现，现在的分配方法中list是无序的，就是根据释放时序。
+// 取的时候，直接去找第一个可行的。
 static struct Page *
 default_alloc_pages(size_t n) {
     assert(n > 0);
+    // 要的页数比剩余free的页数都多，return null
     if (n > nr_free) {
         return NULL;
     }
     struct Page *page = NULL;
     list_entry_t *le = &free_list;
+    // 找了一圈后退出 TODO: list有空的头结点吗？有吧。
     while ((le = list_next(le)) != &free_list) {
+        // 找到这个节点所在的基于Page的变量
+        // 这里的page_link就是成员变量的名字，之后会变成宏。。看起来像是一个变量一样，其实不是。
+        // ((type *)((char *)(ptr) - offsetof(type, member)))
+        // #define offsetof(type, member)
+        // ((size_t)(&((type *)0)->member))
+        // le2page, 找到这个le所在page结构体的头指针，其中这个le是page变量的page_link成员变量
         struct Page *p = le2page(le, page_link);
+        // 找到了一个满足的，就把这个空间（的首页）拿出来
         if (p->property >= n) {
             page = p;
             break;
         }
     }
+    //如果找到了可行区域
     if (page != NULL) {
-        list_del(&(page->page_link));
+        // 这个可行区域的空间大于需求空间，拆分，将剩下的一段放到list中【free+list的后面一个】
         if (page->property > n) {
             struct Page *p = page + n;
             p->property = page->property - n;
-            list_add(&free_list, &(p->page_link));
-    }
+            SetPageProperty(p);
+            // 加入后来的，p
+            list_add_after(&(page->page_link), &(p->page_link));
+            // list_add(&free_list, &(p->page_link));
+        }
+        // 删除原来的
+        list_del(&(page->page_link));
+        // 更新空余空间的状态
         nr_free -= n;
+        //page被使用了，所以把它的属性clear掉
         ClearPageProperty(page);
     }
+    // 返回page
     return page;
 }
 
@@ -151,31 +182,45 @@ static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
     struct Page *p = base;
+    // 先更改被释放的这几页的标记位
     for (; p != base + n; p ++) {
         assert(!PageReserved(p) && !PageProperty(p));
         p->flags = 0;
         set_page_ref(p, 0);
     }
+    // 将这几块视为一个连续的内存空间
     base->property = n;
     SetPageProperty(base);
-    list_entry_t *le = list_next(&free_list);
-    while (le != &free_list) {
-        p = le2page(le, page_link);
-        le = list_next(le);
-        if (base + base->property == p) {
-            base->property += p->property;
-            ClearPageProperty(p);
-            list_del(&(p->page_link));
-        }
-        else if (p + p->property == base) {
+
+
+    list_entry_t *next_entry = list_next(&free_list);
+    // 找到base的前一块空块
+    while (next_entry != &free_list && le2page(next_entry, page_link) < base)
+        next_entry = list_next(next_entry);
+    // Merge block
+    list_entry_t *prev_entry = list_prev(next_entry);
+    list_entry_t *insert_entry = prev_entry;
+    // 如果和前一块挨在一起，就和前一块合并
+    if (prev_entry != &free_list) {
+        p = le2page(prev_entry, page_link);
+        if (p + p->property == base) {
             p->property += base->property;
             ClearPageProperty(base);
             base = p;
-            list_del(&(p->page_link));
+            insert_entry = list_prev(prev_entry);
+            list_del(prev_entry);
+        }
+    }
+    if (next_entry != &free_list) {
+        p = le2page(next_entry, page_link);
+        if (base + base->property == p) {
+            base->property += p->property;
+            ClearPageProperty(p);
+            list_del(next_entry);
         }
     }
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
+    list_add(insert_entry, &(base->page_link));
 }
 
 static size_t
