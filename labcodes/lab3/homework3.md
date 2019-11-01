@@ -88,20 +88,102 @@ struct mm_struct { // 描述一个进程的虚拟地址空间 每个进程的 pc
 
 由于swap动作本身很复杂，有很多算法，有内部状态，所以单独抽象出一个和`pmm_manager`, `vmm_manager` 同级别的 `swap_mamager`。
 
-// TODO
+在swap过程中，我们首先要知道目标页被换到硬盘的位置，磁盘上要换走谁。ucore中，用物理地址的前24位保存硬盘存储位置的首扇区（共八个扇区，0.5kb一个扇区）（并且设计简化的对应关系：虚拟页对应的PTE的索引值 = swap page的扇区起始位置*8（进而Page需要额外记录引用它的虚拟地址））。根据不同算法，PRA的数据结构维护方式不同，对于FIFO算法，我们将维护一个（时序）（双向）链表，换走时换走头部的，并将被换入的放入头部之前（也即链表尾部）。
+
+为了支持FIFO，PRA，对物理块额外建立一个链表，在Page struct上添加属性`pra_page_link`，并额外的使用`pra_vaddr`记录物理页对应的虚拟地址（首地址），用于确定换出的物理磁盘扇面号.
+
+```c++
+struct Page {  
+……   
+list_entry_t pra_page_link;   
+uintptr_t pra_vaddr;   
+};
+```
+
+对于`swap_mamager`，记录一下它各个属性的功能。其中`map_swappable()`，用于将一个页面加入FIFO算法队列，`swap_out_victim()`用于清空一个page，它在page_fault中断时alloc_page()函数中调用。（这个alloc_page调用pmm_manager->alloc_page()，是优先级更高一层的函数）。
+
+> 其他函数用于extended clock算法等，先不提及啦。
+
+```c++
+struct swap_manager  
+{  
+    const char *name;  
+    /* Global initialization for the swap manager */  
+    int (*init) (void);  
+    /* Initialize the priv data inside mm_struct */  
+    int (*init_mm) (struct mm_struct *mm);  
+    /* Called when tick interrupt occured */  
+    int (*tick_event) (struct mm_struct *mm);  
+    /* Called when map a swappable page into the mm_struct */  
+    int (*map_swappable) (struct mm_struct *mm, uintptr_t addr, struct Page *page, int swap_in); 
+    /* When a page is marked as shared, this routine is called to delete the addr entry from the swap manager */
+    int (*set_unswappable) (struct mm_struct *mm, uintptr_t addr);  
+    /* Try to swap out a page, return then victim */  
+    int (*swap_out_victim) (struct mm_struct *mm, struct Page *ptr_page, int in_tick);  
+    /* check the page relpacement algorithm */  
+    int (*check\_swap)(void);   
+};
+```
 
 ## 练习2：补充基于FIFO的页面替换算法
 
+上面的page_alloc_page已经调用了swap_out[将victim的页表项处理好了（见`swap.c/swap_out()`）]。这一步不用再管他直接从硬盘读入即可。
+
+如注释。
+
+```c++
+...
+if(swap_init_ok) {
+            struct Page *page=NULL;
+            swap_in(mm, addr, &page); // 根据pte上信息，将page从硬盘换入
+            page_insert(mm->pgdir, page, addr, perm); // 更新PTE对应项，建立线性地址与物理地址的映射
+            page->pra_vaddr = addr; // 记录物理页对应的虚拟地址，以用于硬盘后续的换入换出
+            swap_map_swappable(mm, addr, page, 0); // 将这一页加入FIFO的链表
+        }
+        else {
+            cprintf("no swap_init_ok but ptep is %x, failed\n",*ptep);
+            goto failed;
+        }
+...
+```
+
+两个算法的实现，也都相对简单。
+
+```c++
+static int
+_fifo_map_swappable(struct mm_struct *mm, uintptr_t addr, struct Page *page, int swap_in)
+{
+    list_entry_t *head=(list_entry_t*) mm->sm_priv;
+    list_entry_t *entry=&(page->pra_page_link);
+ 
+    assert(entry != NULL && head != NULL);
+    list_add_before(head, entry);// 插入末尾
+    return 0;
+}
+
+static int
+_fifo_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick)
+{
+    list_entry_t *head=(list_entry_t*) mm->sm_priv;
+    assert(head != NULL);
+    assert(in_tick==0);
+    list_entry_t *first = list_next(head); //删去头
+    list_del(first);
+    *ptr_page = le2page(first, pra_page_link); //将这个page返回，用于找到va，找到对应页表项，并修改victim的页表项。
+    return 0;
+}
+```
+
 ## Challenge1：识别dirty bit的extended clock页替换算法
-
-
 
 ## Challenge2：不考虑实现开销和效率的LRU页算法
 
 
 ## 附录
 
-lab3 与 lab2的差别：面向物理内存 or 面向虚拟内存。【lab2只有虚拟地址到物理地址的转换，分配物理内存，释放等】，不过没有建立物理内存与虚拟地址关系的过程。【更没有进一步的页面替换】。
+一些没有整理的笔记，暂时注释掉了。challenge想再八个lab都做完后再做。
+
+<!-- lab3 与 lab2的差别：面向物理内存 or 面向虚拟内存。【lab2只有虚拟地址到物理地址的转换，分配物理内存，释放等】，不过没有建立物理内存与虚拟地址关系的过程。【更没有进一步的页面替换】。
 
 现需要描述应用程序运行，所需的合法内存空间。page fault时获取应用程序的访问信息
 
@@ -113,16 +195,8 @@ Integrated Drive Electronics (IDE) is a standard interface for connecting a moth
 
 页表项结构，标志位含义。其实产生了很大的差异。
 
-![image-20191019195159649](/Users/lxy/Library/Application Support/typora-user-images/image-20191019195159649.png)
-
-三个问题：
-
-1. 当程序运行中访问内存产生page fault异常时，如何判定这个引起异常的虚拟地址内存访问是越界、写只读页的“非法地址”访问还是由于数据被临时换出到磁盘上或还没有分配内存的“合法地址”访问？
-2. 何时进行请求调页/页换入换出处理？
-3. 如何在现有ucore的基础上实现页替换算法？
-
 页面的换入换出，实际上将缓存的页面看成了一级cache，所以要注意回写之类内容！【下面这个处理过程实际上是很简化的】
 
 ![image-20191019195948253](/Users/lxy/Library/Application Support/typora-user-images/image-20191019195948253.png)
 
-要注意，需要重新执行产生缺页的指令！而不是从下一句继续执行。（是不是非致命性的异常都会重新执行那一句指令？）
+要注意，需要重新执行产生缺页的指令！而不是从下一句继续执行。（是不是非致命性的异常都会重新执行那一句指令？） -->
