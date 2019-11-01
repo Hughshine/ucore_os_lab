@@ -82,6 +82,17 @@ struct mm_struct { // 描述一个进程的虚拟地址空间 每个进程的 pc
     }
 ```
 
+回答问题：
+
+1. 请描述页目录项（Page Directory Entry）和页表项（Page Table Entry）中组成部分对ucore实现页替换算法的潜在用处。
+
+> 页目录项：就是一级页表嘛，用来找到二级页表项。。
+> 页表项：存储映射关系，在需要页的换入换出时，用于辅助记录磁盘上的位置。
+
+2. 如果ucore的缺页服务例程在执行过程中访问内存，出现了页访问异常，请问硬件要做哪些事情？
+
+> 这一练习开始时提到了。
+
 ## 再补充一点Notes
 
 练习二的逻辑比较简单，但是先要明白ucore中swap的实现，以及设计的相关的数据结构。
@@ -173,6 +184,27 @@ _fifo_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick
     return 0;
 }
 ```
+
+问题：
+
+如果要在ucore上实现”extended clock页替换算法”请给你的设计方案，现有的swap_manager框架是否足以支持在ucore中实现此算法？如果是，请给你的设计方案。如果不是，请给出你的新的扩展和基此扩展的设计方案。并需要回答如下问题：
+
+* 需要被换出的页的特征是什么？
+
+>  寻找顺序：不脏又没访问过的页 => 访问但没修改的页 => 访问了修改了的页
+
+* 在ucore中如何判断具有这样特征的页？
+
+```c++
+// A => Access, D => Dirty
+!(*ptep & PTE_A) && !(*ptep & PTE_D)  没被访问过 也没被修改过
+(*ptep & PTE_A) && !(*ptep & PTE_D) 被访问过 但没被修改过
+!(*ptep & PTE_A) && (*ptep & PTE_D) 没被访问过 但被修改过
+```
+
+* 何时进行换入和换出操作？
+
+> 在缺页时换入；在物理页达到某个下限阈值时换出。
 
 ## Challenge1：识别dirty bit的extended clock页替换算法
 
