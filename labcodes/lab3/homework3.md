@@ -45,9 +45,9 @@ mm_struct用于记录一个进程的虚拟地址空间，即一个进程拥有�
 struct mm_struct { // 描述一个进程的虚拟地址空间 每个进程的 pcb 中 会有一个指针指向本结构体
     list_entry_t mmap_list;        // 链接同一页目录表的虚拟内存空间 的 双向链表的 头节点（即这个进程的虚拟地址空间声明的[虚拟内存块的链表头]）
     struct vma_struct *mmap_cache; // 当前正在使用的虚拟内存空间，利用局部性优化
-    pde_t *pgdir;                  // mm_struct 所维护的页表地址(拿来找 PTE)（一级页表地址）
+    pde_t *pgdir;                  // mm_struct 所维护的页表地址(拿来找 PTE)（一级页表 PDT 地址）
     int map_count;                 // 虚拟内存块的数目
-    void *sm_priv;                 // 记录访问情况链表头地址(用于置换算法)（给swap manager使用）
+    void *sm_priv;                 // 记录访问情况链表头地址(用于置换算法)（给swap manager使用）[swap manager维护的实例]
 };
 ```
 
@@ -73,6 +73,7 @@ struct mm_struct { // 描述一个进程的虚拟地址空间 每个进程的 pc
     if(ptep == NULL)
         goto failed;
     if (*ptep == 0) { // 如果不存在到物理地址的映射，就创建这个映射
+    // call alloc_page & page_insert functions to allocate a page size memory & setup an addr map pa<--->la with linear address la and the PDT pgdir
         struct Page *page = pgdir_alloc_page(mm->pgdir, addr, perm);//perm is short for permission
         if(page == NULL)
             goto failed;
@@ -147,6 +148,7 @@ struct swap_manager
 if(swap_init_ok) {
             struct Page *page=NULL;
             swap_in(mm, addr, &page); // 根据pte上信息，将page从硬盘换入
+            // swap_in 调用 alloc_page, 进而间接调用swap_out_victim
             page_insert(mm->pgdir, page, addr, perm); // 更新PTE对应项，建立线性地址与物理地址的映射
             page->pra_vaddr = addr; // 记录物理页对应的虚拟地址，以用于硬盘后续的换入换出
             swap_map_swappable(mm, addr, page, 0); // 将这一页加入FIFO的链表
@@ -191,6 +193,10 @@ _fifo_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick
 
 * 需要被换出的页的特征是什么？
 
+> 时钟算法：相当于在FIFO基础上，仅跳过访问过的页。
+> extended clock: 回写代价高，所以在看页是否被回写的基础上，再考虑是否被访问。
+> 标记位再pte上
+
 >  寻找顺序：不脏又没访问过的页 => 访问但没修改的页 => 访问了修改了的页
 
 * 在ucore中如何判断具有这样特征的页？
@@ -213,7 +219,7 @@ _fifo_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick
 
 ## 附录
 
-一些没有整理的笔记，暂时注释掉了。challenge想再八个lab都做完后再做。
+一些没有整理的笔记，暂时注释掉了。challenge想在八个lab都做完后再做。
 
 <!-- lab3 与 lab2的差别：面向物理内存 or 面向虚拟内存。【lab2只有虚拟地址到物理地址的转换，分配物理内存，释放等】，不过没有建立物理内存与虚拟地址关系的过程。【更没有进一步的页面替换】。
 
