@@ -358,12 +358,12 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
         if(page == NULL)
             return NULL;
         set_page_ref(page, 1); 
-        uintptr_t pa = page2pa(page); // 
-        memset(KADDR(pa), 0, PGSIZE);
+        uintptr_t pa = page2pa(page); 
+        memset(KADDR(pa), 0, PGSIZE); // 页清空
         // 在一级页表中，设置该项
         *pdep = (pa & ~0xFFF) | PTE_P | PTE_W | PTE_U;
     }
-    // (pte_t *)KADDR(PDE_ADDR(*pdep)): 找到二级页表
+    // (pte_t *)KADDR(PDE_ADDR(*pdep)): 找到二级页表的核虚拟地址
     // [PTX(la)] 加上la中相对二级页表的偏移
     // 取地址，返回
     return &((pte_t *)KADDR(PDE_ADDR(*pdep)))[PTX(la)];

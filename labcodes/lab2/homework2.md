@@ -75,7 +75,7 @@ default_init_memmap(struct Page *base, size_t n) {
 
 就是找到第一个足够大的页，然后分配它。主要是`free`时，没有保证顺序，所以分配时也是乱序的。这一段只需要改：拆分时小块的插入位置，就插在拆分前处，而不是在list最后即可。
 
-```c
+```cpp
 // 可以发现，现在的分配方法中list是无序的，就是根据释放时序。
 // 取的时候，直接去找第一个可行的。
 static struct Page *
@@ -164,7 +164,7 @@ default_alloc_pages(size_t n) {
 
 修改后。
 
-```c
+```c++
 static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
@@ -217,7 +217,7 @@ default_free_pages(struct Page *base, size_t n) {
 
 前面已经对`free`过程查找前后紧邻块做了优化。
 
-如果对于每个空闲快，信息相同的保存在首与尾，那么在释放一个快时，就可以检查前一个page和后一个page是否是空闲的。如果前一个是空闲的，直接把本块信息清除即可；如果后一块是空闲的，把后一块的首page清除即可，此时`free`操作时常数时间。如果都不是，则需要用线性时间找到对应位置，插入块。
+如果对于每个空闲快，信息相同的保存在首与尾，那么在释放一个快时，就可以检查前一个page和后一个page是否是空闲的。如果前一个是空闲的，修改前一块的ref，然后直接把本块信息清除即可；如果后一块是空闲的，把后一块的首page、末page清除，并相应调整块大小。此时`free`操作时常数时间。如果都不是，则需要用线性时间找到对应位置，插入块。
 
 ### 测试结果
 
@@ -244,7 +244,7 @@ check_alloc_page() succeeded!
 
 5. 并在一级页表中建立该项。最后返回。
 
-   > 注：返回的是pte的虚拟地址，它的计算方法是：
+   > 注：返回的是pte的kernel virtual addr，它的计算方法是：
    >
    > 找到该线性地址的页目录项 ==> 
    >
@@ -252,25 +252,26 @@ check_alloc_page() succeeded!
    >
    > 根据线性地址在二级页表中的偏移，找到对应页表项地址。
 
-```c
+```cpp
 pte_t *
 get_pte(pde_t *pgdir, uintptr_t la, bool create) {
-    pde_t *pdep = &pgdir[PDX(la)]; // 在以及
-    if(!(*pdep & PTE_P)) // 如果存在，直接返回
+    // 段机制后得到的地址是linear_addr, ucore中目前va = la
+    pde_t *pdep = &pgdir[PDX(la)]; // 找到它的一级页表项（指针），PDX，线性地址的前十位，page dir index
+    if(!(*pdep & PTE_P)) // 如果二级页表存在，在二级页表中找到，并直接返回
     {   
         if(!create) // 不要求create，直接返回
             return NULL;
-        // 否则alloc a page，（成功的话）并设置这个page的ref为1，将内存也清空。
+        // 否则alloc a page，建立二级页表，（成功的话）并设置这个page的ref为1，将内存也清空。
         struct Page* page = alloc_page(); 
         if(page == NULL)
             return NULL;
         set_page_ref(page, 1); 
-        uintptr_t pa = page2pa(page); // 
+        uintptr_t pa = page2pa(page); // 页清空
         memset(KADDR(pa), 0, PGSIZE);
-        // 在一级页表中，设置该项
+        // 在一级页表中，设置该二级页表入口
         *pdep = (pa & ~0xFFF) | PTE_P | PTE_W | PTE_U;
     }
-    return &((pte_t *)KADDR(PDE_ADDR(*pdep)))[PTX(la)];
+    return &((pte_t *)KADDR(PDE_ADDR(*pdep)))[PTX(la)];  // 
 }
 ```
 问题：
@@ -307,10 +308,10 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
 2. 否则，对应二级页表的`ref--`，若`ref==0`，`free`该页。
 3. 回写快表，置脏位。
 
-```c
+```cpp
 static inline void
 page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
-    if (*ptep & PTE_P) { // 如果二级页表项存在且有效
+    if (*ptep & PTE_P) { // 如果二级页表项存在
         struct Page *page = pte2page(*ptep); // 找到这个二级页表项对应的page
         if (page_ref_dec(page) == 0) // 自减该page的ref，如果为0，则free该page
             free_page(page);
