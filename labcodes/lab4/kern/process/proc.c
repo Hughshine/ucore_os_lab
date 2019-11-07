@@ -352,7 +352,7 @@ proc_init(void) {
     if (pid <= 0) {
         panic("create init_main failed.\n");
     }
-
+    
     initproc = find_proc(pid);
     set_proc_name(initproc, "init");
 

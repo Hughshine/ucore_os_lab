@@ -305,5 +305,25 @@ print_stackframe(void) {
       *           NOTICE: the calling funciton's return addr eip  = ss:[ebp+4]
       *                   the calling funciton's ebp = ss:[ebp]
       */
+     uint32_t ebp = read_ebp();
+     uint32_t eip = read_eip();
+     /*按照16进制输出，补齐8位的宽度，补齐位为0，默认右对齐*/
+     for (int i = 0; ebp != 0 && i < STACKFRAME_DEPTH; i++)
+     {
+         cprintf("ebp:0x%08x ", ebp);
+         cprintf("eip:0x%08x ", eip);
+
+         uint32_t *args = (uint32_t *)ebp + 2;
+         for (int j = 0; j < 4; j++)
+         {
+             cprintf("args[%d]:0x%08x ", j, args[j]);
+         }
+
+         cprintf("\n");
+         print_debuginfo(eip - 1);
+
+         eip = ((uint32_t *)ebp)[1];
+         ebp = ((uint32_t *)ebp)[0];
+     }
 }
 
