@@ -363,7 +363,6 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
      *   PTE_W           0x002                   // page table/directory entry flags bit : Writeable
      *   PTE_U           0x004                   // page table/directory entry flags bit : User can access
      */
-#if 1
     pde_t *pdep = &pgdir[PDX(la)]; // 找到它的一级页表项（指针）
     if (!(*pdep & PTE_P))          // 如果存在，直接返回
     {
@@ -383,7 +382,6 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     // [PTX(la)] 加上la中相对二级页表的偏移
     // 取地址，返回
     return &((pte_t *)KADDR(PDE_ADDR(*pdep)))[PTX(la)];
-#endif
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
@@ -420,7 +418,6 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
      * DEFINEs:
      *   PTE_P           0x001                   // page table/directory entry flags bit : Present
      */
-#if 1
     if (*ptep & PTE_P)
     {                                        // 如果二级页表项存在且有效
         struct Page *page = pte2page(*ptep); // 找到这个二级页表项对应的page
@@ -431,7 +428,6 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
                    // 如果不是，则它根本不在快表中。
         tlb_invalidate(pgdir, la);
     }
-#endif
 }
 
 //page_remove - free an Page which is related linear address la and has an validated pte

@@ -201,8 +201,6 @@ default_free_pages(struct Page *base, size_t n) {
     // 将这几块视为一个连续的内存空间
     base->property = n;
     SetPageProperty(base);
-
-
     list_entry_t *next_entry = list_next(&free_list);
     // 找到base的前一块空块
     while (next_entry != &free_list && le2page(next_entry, page_link) < base)
