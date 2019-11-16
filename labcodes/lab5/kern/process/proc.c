@@ -411,7 +411,7 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
         proc->pid = get_pid(); // 这一句话要在前面！！！ 
         hash_proc(proc);
         // nr_process++;
-        set_links(proc);  // TODO, 额外修改的部分
+        set_links(proc); // TODO, 额外修改的部分
     }
     local_intr_restore(intr_flag);
 
