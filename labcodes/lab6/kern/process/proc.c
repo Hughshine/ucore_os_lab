@@ -119,6 +119,29 @@ alloc_proc(void) {
      *     uint32_t lab6_stride;                       // FOR LAB6 ONLY: the current stride of the process
      *     uint32_t lab6_priority;                     // FOR LAB6 ONLY: the priority of process, set by lab6_set_priority(uint32_t)
      */
+        proc->state = PROC_UNINIT;
+        proc->pid = -1;
+        proc->runs = 0;
+        proc->kstack = 0;
+        proc->need_resched = NULL;
+        proc->parent = NULL;
+        proc->mm = NULL;
+        memset(&(proc->context), 0, sizeof(struct context));
+        proc->tf = NULL;
+        proc->cr3 = boot_cr3;
+        proc->flags = 0;
+        memset(&(proc->name), 0, PROC_NAME_LEN);
+
+        // 新添加: 初始化进程等待状态 初始化进程相关指针
+        proc->wait_state = 0;
+        // | cptr : proc is parent |
+        // | yptr : proc is younger sibling |
+        // | optr : proc is older sibling |
+        proc->cptr = proc->yptr = proc->optr = NULL;
+        // for LAB6 
+         proc->rq = NULL;
+        list_init(&(proc->run_link));
+        proc->time_slice = 0;
     }
     return proc;
 }
@@ -413,7 +436,40 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
 	*    update step 1: set child proc's parent to current process, make sure current process's wait_state is 0
 	*    update step 5: insert proc_struct into hash_list && proc_list, set the relation links of process
     */
-	
+	if ((proc = alloc_proc()) == NULL)
+    {
+        goto fork_out;
+    }
+    proc->parent = current; // 设置父进程
+    assert(current->wait_state == 0);  // 额外添加的，TODO
+    //    2. call setup_kstack to allocate a kernel stack for child process
+    if (setup_kstack(proc) != 0)
+    {
+        goto bad_fork_cleanup_proc;
+    }
+    //    3. call copy_mm to dup OR share mm according clone_flag
+    if (copy_mm(clone_flags, proc) != 0)
+    {
+        goto bad_fork_cleanup_kstack;
+    }
+    //    4. call copy_thread to setup tf & context in proc_struct
+    copy_thread(proc, stack, tf);
+    //    5. insert proc_struct into hash_list && proc_list
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    {
+        // get_pid()是不会被打断的，所以一定可以保证不会出问题。
+        proc->pid = get_pid(); // 这一句话要在前面！！！ 
+        hash_proc(proc);
+        // nr_process++;
+        set_links(proc); // TODO, 额外修改的部分
+    }
+    local_intr_restore(intr_flag);
+
+    //    6. call wakeup_proc to make the new child process RUNNABLE
+    wakeup_proc(proc);
+    //    7. set ret vaule using child proc's pid
+    ret = proc->pid;
 fork_out:
     return ret;
 
@@ -612,6 +668,11 @@ load_icode(unsigned char *binary, size_t size) {
      *          tf_eip should be the entry point of this binary program (elf->e_entry)
      *          tf_eflags should be set to enable computer to produce Interrupt
      */
+    tf->tf_cs = USER_CS;
+    tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+    tf->tf_esp = USTACKTOP;
+    tf->tf_eip = elf->e_entry;
+    tf->tf_eflags = tf->tf_eflags | FL_IF;
     ret = 0;
 out:
     return ret;

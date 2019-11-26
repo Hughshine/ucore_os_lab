@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/bin/bash
+# set -x
 
 verbose=false
 if [ "x$1" = "x-v" ]; then
@@ -260,7 +261,7 @@ run_test() {
         select=
         case $1 in
             -tag|-prog)
-                select=`expr substr $1 2 ${#1}`
+                select=`echo $1 | cut -c 2-${#1}`
                 eval $select='$2'
                 ;;
         esac
