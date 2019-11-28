@@ -1,5 +1,21 @@
 # lab6
 
+Table of Contents
+=================
+
+   * [lab6](#lab6)
+      * [notes](#notes)
+         * [抢占点](#抢占点)
+         * [进程切换](#进程切换)
+      * [practices](#practices)
+         * [practice0](#practice0)
+         * [practice1 使用 Round Robin 调度算法](#practice1-使用-round-robin-调度算法)
+         * [practice2  实现 Stride Scheduling 调度算法（需要编码）](#practice2--实现-stride-scheduling-调度算法需要编码)
+            * [stride-scheduling 算法（SS算法）](#stride-scheduling-算法ss算法)
+               * [溢出问题](#溢出问题)
+            * [实现](#实现)
+      * [make grade](#make-grade)
+
 ## notes
 
 ### 抢占点
@@ -149,6 +165,161 @@ RR_proc_tick(struct run_queue *rq, struct proc_struct *proc) {
 
 状态修改：timetick，降低当前进程的timeslice；如果为0了，还没结束，放入比之前第一个优先级的队列中，并schedule。
 
-### practice2
+### practice2  实现 Stride Scheduling 调度算法（需要编码）
 
+#### stride-scheduling 算法（SS算法）
 
+SS算法引入了简单的优先级机制。在最静态的情况下，它为每个proc增加三个属性，`tickets`, `stride`, `pass`，tickets是权重，stride是这个进程两次调度等候间隔的时长（单位是quantum，一个定义的常数，可以理解为时间片长度），pass为这个进程下一次被调度的时间点。stride与tickets的倒数呈负相关，实现时不使用浮点数，转而用大整数触发近似代替，如此便可以很好的适应时间片离散的性质（作为调度时间的基本单位）。
+
+$$
+stride_i = \frac{stride_1}{tickets} 
+$$
+
+在每个时间调度点，选择pass最小的进程替换当前进程，更新当前进程的pass值并放入（优先）队列。（当然，如果还是自己，只做参数更新就可以了。）
+
+> ucore上给的介绍，参数定义和论文不相符。
+
+以上叙述的是最简单的情况，实际运行中，进程数量、优先级都可能会变，需要不断对参数进行动态调整。例如在进程变多时，我们希望每个进程每一次调度的运行时间更短，以保持交互性。在进程运行更久时，我们可能希望降低进程的优先级。
+
+> 不过这些都没有在实验指导书中说明。
+
+##### 溢出问题
+
+因为pass是不断增长的，最后很有可能会溢出，导致比较问题。我们可以使用特殊的比较方法解决它。将pass设置为unsigned，将最大步长设置为有符号整数最大值，我们就可以利用pass的有符号比较，得出正确结果。
+
+```cpp
+(int32_t)(p->lab6_stride - q->lab6_stride) > 0
+```
+
+#### 实现
+
+为proc增加一个新的属性`uint32_t lab6_pass`，初始化proc时，设置相应属性。
+```cpp
+    proc->lab6_run_pool.parent = proc->lab6_run_pool.left = proc->lab6_run_pool.right = NULL;
+    // 优先级 (和步进成反比)
+    proc->lab6_priority = 0;
+    // 步进值
+    proc->lab6_stride = 0;
+    proc->lab6_pass = 0;
+```
+
+按照注释填写SS的各个函数。
+
+```cpp
+// 为避免溢出问题，设置BIG_STRIDE为有符号int的上限
+#define BIG_STRIDE (((uint32_t)-1) / 2)
+
+/* The compare function for two skew_heap_node_t's and the
+ * corresponding procs*/
+// 为了和论文命名同步，比较的时候我希望按pass比较
+static int
+proc_stride_comp_f(void *a, void *b)
+{
+     struct proc_struct *p = le2proc(a, lab6_run_pool);
+     struct proc_struct *q = le2proc(b, lab6_run_pool);
+     // int32_t c = p->lab6_stride - q->lab6_stride;
+     int32_t c = p->lab6_pass - q->lab6_pass;
+
+     if (c > 0) return 1;
+     else if (c == 0) return 0;
+     else return -1;
+}
+// 初始化时，init 运行队列（没有很大作用），和斜堆
+static void
+stride_init(struct run_queue *rq) {
+     /* LAB6: YOUR CODE 
+      * (1) init the ready process list: rq->run_list
+      * (2) init the run pool: rq->lab6_run_pool
+      * (3) set number of process: rq->proc_num to 0       
+      */
+     list_init(&rq->run_list);
+     rq->lab6_run_pool = NULL;
+     rq->proc_num = 0;
+}
+
+static void
+stride_enqueue(struct run_queue *rq, struct proc_struct *proc) {
+     /* LAB6: YOUR CODE 
+      * (1) insert the proc into rq correctly
+      * NOTICE: you can use skew_heap or list. Important functions
+      *         skew_heap_insert: insert a entry into skew_heap
+      *         list_add_before: insert  a entry into the last of list   
+      * (2) recalculate proc->time_slice
+      * (3) set proc->rq pointer to rq
+      * (4) increase rq->proc_num
+      */
+     // 对斜堆的操作，每次都返回新的根，因而重新赋值。
+     rq->lab6_run_pool = skew_heap_insert(rq->lab6_run_pool, &(proc->lab6_run_pool), proc_stride_comp_f);
+     if (proc->lab6_priority == 0)
+     {
+          proc->lab6_priority = 1;
+     }
+    // 重置time slice
+     if (proc->time_slice == 0 || proc->time_slice > rq->max_time_slice)
+     {
+          proc->time_slice = rq->max_time_slice; // max_time_slice ==> quantum
+     }
+     proc->rq = rq;
+     rq->proc_num += 1;
+}
+
+/*
+ * stride_dequeue removes the process ``proc'' from the run-queue
+ * ``rq'', the operation would be finished by the skew_heap_remove
+ * operations. Remember to update the ``rq'' structure.
+ *
+ * hint: see libs/skew_heap.h for routines of the priority
+ * queue structures.
+ */
+static void
+stride_dequeue(struct run_queue *rq, struct proc_struct *proc) {
+    // 相似
+     /* LAB6: YOUR CODE 
+      * (1) remove the proc from rq correctly
+      * NOTICE: you can use skew_heap or list. Important functions
+      *         skew_heap_remove: remove a entry from skew_heap
+      *         list_del_init: remove a entry from the  list
+      */
+     rq->lab6_run_pool = skew_heap_remove(rq->lab6_run_pool, &(proc->lab6_run_pool), proc_stride_comp_f);
+     --rq->proc_num;
+}
+
+static struct proc_struct *
+stride_pick_next(struct run_queue *rq) {
+     /* LAB6: YOUR CODE 
+      * (1) get a  proc_struct pointer p  with the minimum value of stride
+             (1.1) If using skew_heap, we can use le2proc get the p from rq->lab6_run_poll
+             (1.2) If using list, we have to search list to find the p with minimum stride value
+      * (2) update p;s stride value: p->lab6_stride
+      * (3) return p
+      */
+     if (rq->lab6_run_pool == NULL)
+     {
+          return NULL;
+     }
+     // 斜堆的顶就是 pass 值最小的进程
+     struct proc_struct *p = le2proc(rq->lab6_run_pool, lab6_run_pool);
+    // 被选择后，pass更新为下一个。其实开始的时候算出来stride，直接+=stride即可。
+     p->lab6_pass += BIG_STRIDE / p->lab6_priority;
+     return p;
+}
+
+static void
+stride_proc_tick(struct run_queue *rq, struct proc_struct *proc) {
+    // 因为SS算法也是基于时钟中断的，时间片长度也是固定的（quantum），此处和RR算法一样。
+     /* LAB6: YOUR CODE */
+     if (proc->time_slice == 0)
+     {
+          proc->need_resched = 1;
+     }
+     else
+     {
+          --proc->time_slice;
+     }
+}
+
+```
+
+## `make grade`
+
+目前没有通过make grade，可能是复制代码的时候复制的不对。

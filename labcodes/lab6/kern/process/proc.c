@@ -123,7 +123,7 @@ alloc_proc(void) {
         proc->pid = -1;
         proc->runs = 0;
         proc->kstack = 0;
-        proc->need_resched = NULL;
+        proc->need_resched = 0;
         proc->parent = NULL;
         proc->mm = NULL;
         memset(&(proc->context), 0, sizeof(struct context));
@@ -139,9 +139,17 @@ alloc_proc(void) {
         // | optr : proc is older sibling |
         proc->cptr = proc->yptr = proc->optr = NULL;
         // for LAB6 
-         proc->rq = NULL;
+        proc->rq = NULL;
         list_init(&(proc->run_link));
         proc->time_slice = 0;
+        // for stride sched
+        // 斜堆实现的 Priority Queue
+        proc->lab6_run_pool.parent = proc->lab6_run_pool.left = proc->lab6_run_pool.right = NULL;
+        // 优先级 (和步进成反比)
+        proc->lab6_priority = 0;
+        // 步进值
+        proc->lab6_stride = 0;
+        proc->lab6_pass = 0;
     }
     return proc;
 }

@@ -162,7 +162,7 @@ default_free_pages(struct Page *base, size_t n) {
     // 先更改被释放的这几页的标记位
     for (; p != base + n; p++)
     {
-        // cprintf("%d\n", PageReserved(p)); // why is 1
+        // cprintf("%d\n", PageReserved(p)); // why is 1?
         // cprintf("%d\n", PageProperty(p));
         // cprintf(PageProperty(p));
         assert(!PageReserved(p) && !PageProperty(p));
