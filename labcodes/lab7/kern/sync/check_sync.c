@@ -202,7 +202,6 @@ void phi_put_forks_condvar(int i) {
      // LAB7 EXERCISE1: YOUR CODE
      // I ate over
      // test left and right neighbors
-    down(&(mtp->mutex));
     state_condvar[i] = THINKING;
     phi_test_condvar(LEFT);
     phi_test_condvar(RIGHT);

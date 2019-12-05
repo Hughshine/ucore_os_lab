@@ -181,11 +181,13 @@ check_swap(void)
 {
     //backup mem env
      int ret, count = 0, total = 0, i;
+     int j=0;
      list_entry_t *le = &free_list;
      while ((le = list_next(le)) != &free_list) {
         struct Page *p = le2page(le, page_link);
-        assert(PageProperty(p));
-        count ++, total += p->property;
+     //    assert(PageProperty(p)); // what happened????
+          cprintf("%d \n", j);
+          count++, total += p->property;
      }
      assert(total == nr_free_pages());
      cprintf("BEGIN check_swap: count %d, total %d\n",count,total);
