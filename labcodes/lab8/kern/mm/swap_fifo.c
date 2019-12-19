@@ -51,6 +51,7 @@ _fifo_map_swappable(struct mm_struct *mm, uintptr_t addr, struct Page *page, int
     //record the page access situlation
     /*LAB3 EXERCISE 2: YOUR CODE*/ 
     //(1)link the most recent arrival page at the back of the pra_list_head qeueue.
+    list_add(head, entry);
     return 0;
 }
 /*
@@ -66,10 +67,47 @@ _fifo_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick
      /* Select the victim */
      /*LAB3 EXERCISE 2: YOUR CODE*/ 
      //(1)  unlink the  earliest arrival page in front of pra_list_head qeueue
+     list_entry_t *le = head->prev;
+     struct Page* page = le2page(le, pra_page_link);
+     list_del(le);
      //(2)  assign the value of *ptr_page to the addr of this page
+     *ptr_page = page;
      return 0;
 }
+static int _extended_clock_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick) {
+    list_entry_t *head = (list_entry_t*)mm->sm_priv;
+    assert(head != NULL);
+    assert(in_tick == 0);
+    list_entry_t *le = head->prev;
+    assert(head != le);
 
+    int i; // 循环三次 寻找合适的置换页
+    for (i = 0; i < 2; i++) {
+        /* 第一次循环 寻找 没被访问过的 且 没被修改过的 同时将被访问过的页的 访问位 清 0
+            第二次循环 依然是寻找 没被访问过的 且 没被修改过的 因为到了此次循环 访问位都被清 0 了 不存在被访问过的
+            只需要找没被修改过的即可 同时将被修改过的页 修改位 清 0
+            第三次循环 还是找 没被访问过 且 没被修改过的 此时 第一次循环 已经将所有访问位 清 0 了
+             第二次循环 也已经将所有修改位清 0 了 故 在第三次循环 一定有 没被访问过 也没被修改过的 页
+        */
+        while (le != head) {
+            struct Page *page = le2page(le, pra_page_link);            
+            pte_t *ptep = get_pte(mm->pgdir, page->pra_vaddr, 0);
+
+            if (!(*ptep & PTE_A) && !(*ptep & PTE_D)) { // 没被访问过 也没被修改过 
+                list_del(le);
+                *ptr_page = page;
+                return 0;
+            }
+            if (i == 0) {
+                *ptep &= 0xFFFFFFDF;
+            } else if (i == 1) {
+                *ptep &= 0xFFFFFFBF;
+            }
+            le = le->prev;
+        }
+        le = le->prev;
+    }
+}
 static int
 _fifo_check_swap(void) {
     cprintf("write Virt Page c in fifo_check_swap\n");
@@ -139,5 +177,6 @@ struct swap_manager swap_manager_fifo =
      .map_swappable   = &_fifo_map_swappable,
      .set_unswappable = &_fifo_set_unswappable,
      .swap_out_victim = &_fifo_swap_out_victim,
+    //  .swap_out_victim = &_extended_clock_swap_out_victim,
      .check_swap      = &_fifo_check_swap,
 };
